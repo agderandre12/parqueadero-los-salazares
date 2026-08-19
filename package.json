@@ -1,0 +1,53 @@
+{
+  "name": "parqueadero-los-salazares",
+  "version": "1.0.0",
+  "description": "Sistema local de gestión de parqueadero de motos - Los Salazares",
+  "main": "./out/main/index.js",
+  "author": "Los Salazares",
+  "license": "UNLICENSED",
+  "private": true,
+  "scripts": {
+    "dev": "electron-vite dev",
+    "build": "electron-vite build",
+    "start": "electron-vite preview",
+    "test": "vite build --config pruebas/vite.config.mjs && electron out/pruebas/index.cjs",
+    "dist": "electron-vite build && electron-builder --win --x64"
+  },
+  "build": {
+    "appId": "com.lossalazares.parqueadero",
+    "productName": "Parqueadero Los Salazares",
+    "directories": {
+      "output": "release"
+    },
+    "files": [
+      "out/**/*",
+      "package.json"
+    ],
+    "win": {
+      "target": [
+        "nsis"
+      ]
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true
+    }
+  },
+  "dependencies": {
+    "@fontsource-variable/geist": "^5.3.0",
+    "@fontsource-variable/geist-mono": "^5.3.0",
+    "node-thermal-printer": "^4.6.1",
+    "react": "^19.2.8",
+    "react-dom": "^19.2.8"
+  },
+  "devDependencies": {
+    "@vitejs/plugin-react": "^5.2.0",
+    "autoprefixer": "^10.5.4",
+    "electron": "^43.4.0",
+    "electron-builder": "^26.15.3",
+    "electron-vite": "^5.0.0",
+    "postcss": "^8.5.26",
+    "tailwindcss": "^3.4.19",
+    "vite": "^7.3.6"
+  }
+}

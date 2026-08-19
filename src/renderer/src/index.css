@@ -1,0 +1,153 @@
+/*
+ * Las fuentes se empaquetan con la app: no hay internet en la caseta y el
+ * Content-Security-Policy del index.html sólo permite 'self'.
+ */
+@import '@fontsource-variable/geist/index.css';
+@import '@fontsource-variable/geist-mono/index.css';
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  html,
+  body,
+  #root {
+    height: 100%;
+  }
+
+  body {
+    @apply bg-lienzo text-tinta antialiased select-none font-sans text-base;
+    font-variant-numeric: tabular-nums;
+  }
+
+  /* Toda cifra que se compare o se refresque va en ancho fijo, para que las
+     columnas no bailen con el auto-refresco cada 5 segundos. */
+  .num,
+  input[type='number'] {
+    font-variant-numeric: tabular-nums;
+    font-feature-settings: 'tnum' 1;
+  }
+
+  /* --- Superficies del navegador ---------------------------------------
+     Selección, cursor, foco y scrollbar vienen sin diseño por defecto.
+     Tematizarlas es lo que separa "construido" de "ensamblado". */
+
+  ::selection {
+    @apply bg-azul-200 text-tinta;
+  }
+
+  :root {
+    caret-color: theme('colors.azul.DEFAULT');
+    accent-color: theme('colors.azul.DEFAULT');
+  }
+
+  *:focus-visible {
+    @apply outline-none ring-2 ring-azul ring-offset-2 ring-offset-lienzo;
+  }
+
+  ::-webkit-scrollbar {
+    width: 11px;
+    height: 11px;
+  }
+  ::-webkit-scrollbar-track {
+    background: transparent;
+  }
+  ::-webkit-scrollbar-thumb {
+    @apply bg-linea-fuerte;
+    border-radius: 99px;
+    border: 3px solid theme('colors.lienzo');
+  }
+  ::-webkit-scrollbar-thumb:hover {
+    @apply bg-niebla;
+  }
+
+  /* El rail es oscuro: su scrollbar necesita el tratamiento inverso. */
+  .oscuro ::-webkit-scrollbar-thumb {
+    @apply bg-tinta-700;
+    border-color: theme('colors.tinta.DEFAULT');
+  }
+}
+
+@layer components {
+  /* --- Contenedores ---------------------------------------------------- */
+
+  .panel {
+    @apply bg-blanco border border-linea rounded-panel;
+  }
+
+  .panel-titulo {
+    @apply text-micro font-medium text-grafito;
+  }
+
+  /* --- Formulario ------------------------------------------------------ */
+
+  .etiqueta {
+    @apply block text-micro font-medium text-grafito mb-1.5;
+  }
+
+  .campo {
+    @apply w-full bg-blanco border border-linea-fuerte rounded-campo px-3 py-2.5
+           text-base font-medium text-tinta placeholder:text-niebla placeholder:font-normal
+           transition-colors duration-rapido ease-salida
+           hover:border-niebla focus:border-azul;
+  }
+
+  .campo:disabled {
+    @apply bg-lienzo text-niebla cursor-not-allowed hover:border-linea-fuerte;
+  }
+
+  /* Campo de placa: el dato que manda en toda la aplicación. */
+  .campo-placa {
+    @apply campo font-mono text-center uppercase tracking-[0.14em] py-3.5 border-azul;
+    font-size: 1.75rem;
+    line-height: 2rem;
+  }
+
+  /* --- Botones ---------------------------------------------------------
+     Un solo acento azul por vista. Todo lo demás es neutro. */
+
+  .btn {
+    @apply inline-flex items-center justify-center gap-2 rounded-campo px-4 py-2.5
+           text-base font-medium whitespace-nowrap
+           transition-colors duration-rapido ease-salida
+           disabled:opacity-45 disabled:cursor-not-allowed;
+  }
+
+  .btn-azul {
+    @apply btn bg-azul-cta text-blanco hover:bg-azul active:bg-azul-700;
+  }
+
+  .btn-neutro {
+    @apply btn bg-blanco text-tinta border border-linea-fuerte
+           hover:bg-lienzo hover:border-niebla;
+  }
+
+  .btn-fantasma {
+    @apply btn text-grafito hover:bg-lienzo hover:text-tinta;
+  }
+
+  .btn-alerta {
+    @apply btn bg-blanco text-alerta border border-alerta/35
+           hover:bg-alerta-50 hover:border-alerta;
+  }
+
+  /* --- Indicadores ----------------------------------------------------- */
+
+  .chip {
+    @apply inline-flex items-center gap-1.5 rounded-full border border-linea
+           bg-blanco px-2.5 py-1 text-micro font-medium text-grafito;
+  }
+
+  .chip-activo {
+    @apply chip bg-azul-50 border-azul-200 text-azul-700;
+  }
+
+  .fila {
+    @apply flex items-center gap-3 px-3 py-2.5 text-base border-b border-linea last:border-b-0;
+  }
+
+  .placa {
+    @apply font-mono font-semibold tracking-[0.03em];
+  }
+}
