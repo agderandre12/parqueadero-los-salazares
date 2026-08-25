@@ -1,15 +1,30 @@
 import { useEffect, useState } from 'react'
 import Icono from '../components/Icono.jsx'
+import PanelCaja from '../components/PanelCaja.jsx'
+import PanelVentas from '../components/PanelVentas.jsx'
 import { cop } from '../lib/format.js'
 
+/*
+ * Métricas y configuración: la vista del administrador. Reúne lo que el
+ * operario no necesita durante el turno — cuánto se ha vendido, cómo está la
+ * caja y cuánto se cobra — y por eso el dinero salió del panel de operación.
+ *
+ * Las dos primeras secciones no se guardan con la barra inferior: leen y
+ * escriben por su cuenta (`window.api.metricas` y `window.api.caja`).
+ */
 const SECCIONES = [
-  { id: 'tarifas', etiqueta: 'Tarifas' },
-  { id: 'reglas', etiqueta: 'Reglas de cobro' },
-  { id: 'negocio', etiqueta: 'Negocio' },
-  { id: 'capacidad', etiqueta: 'Capacidad' },
-  { id: 'impresora', etiqueta: 'Impresora' },
-  { id: 'escaner', etiqueta: 'Escáner' }
+  { id: 'ventas', etiqueta: 'Ventas', grupo: 'Métricas' },
+  { id: 'caja', etiqueta: 'Caja del día', grupo: 'Métricas' },
+  { id: 'tarifas', etiqueta: 'Precios', grupo: 'Configuración' },
+  { id: 'reglas', etiqueta: 'Reglas de cobro', grupo: 'Configuración' },
+  { id: 'negocio', etiqueta: 'Negocio', grupo: 'Configuración' },
+  { id: 'capacidad', etiqueta: 'Capacidad', grupo: 'Configuración' },
+  { id: 'impresora', etiqueta: 'Impresora', grupo: 'Configuración' },
+  { id: 'escaner', etiqueta: 'Escáner', grupo: 'Configuración' }
 ]
+
+// Las métricas ocupan tres columnas; los ajustes se leen mejor angostos.
+const ANCHOS = { ventas: 'max-w-4xl', caja: 'max-w-3xl' }
 
 /** Fila de ajuste: nombre y explicación a la izquierda, control a la derecha. */
 function Ajuste({ titulo, ayuda, children, ancho = 'w-40' }) {
@@ -40,8 +55,8 @@ function Pesos({ valor, onChange }) {
   )
 }
 
-export default function Configuracion({ settings, onGuardado, onAviso }) {
-  const [seccion, setSeccion] = useState('tarifas')
+export default function Configuracion({ settings, seccionInicial = 'tarifas', onGuardado, onAviso }) {
+  const [seccion, setSeccion] = useState(seccionInicial)
   const [form, setForm] = useState(settings || {})
   const [guardando, setGuardando] = useState(false)
   const [probando, setProbando] = useState(false)
@@ -49,6 +64,12 @@ export default function Configuracion({ settings, onGuardado, onAviso }) {
   useEffect(() => {
     if (settings) setForm(settings)
   }, [settings])
+
+  // El rail entra por "Métricas" y el engranaje por "Precios": la misma vista
+  // se abre en la sección que pidió quien navegó.
+  useEffect(() => {
+    setSeccion(seccionInicial)
+  }, [seccionInicial])
 
   const set = (campo) => (valor) => setForm((f) => ({ ...f, [campo]: valor }))
 
@@ -93,32 +114,45 @@ export default function Configuracion({ settings, onGuardado, onAviso }) {
   return (
     <div className="h-full flex flex-col overflow-hidden">
       <div className="flex-1 min-h-0 flex gap-6 p-5 overflow-hidden">
-        <nav className="w-40 shrink-0 space-y-0.5" aria-label="Secciones de configuración">
-          {SECCIONES.map((s) => (
-            <button
-              key={s.id}
-              type="button"
-              aria-current={seccion === s.id ? 'true' : undefined}
-              onClick={() => setSeccion(s.id)}
-              className={`relative w-full rounded-campo px-3 py-2 text-left text-base
-                transition-colors duration-rapido
-                ${
-                  seccion === s.id
-                    ? 'bg-azul-50 text-azul-700 font-medium'
-                    : 'text-grafito hover:bg-lienzo hover:text-tinta'
-                }`}
-            >
-              {seccion === s.id && (
-                <span className="absolute left-0 top-2 bottom-2 w-[3px] rounded-r bg-azul" />
+        <nav className="w-40 shrink-0" aria-label="Secciones de métricas y configuración">
+          {SECCIONES.map((s, i) => (
+            <div key={s.id}>
+              {SECCIONES[i - 1]?.grupo !== s.grupo && (
+                <h2 className="panel-titulo px-3 pt-3 pb-1.5 first:pt-0">{s.grupo}</h2>
               )}
-              {s.etiqueta}
-            </button>
+              <button
+                type="button"
+                aria-current={seccion === s.id ? 'true' : undefined}
+                onClick={() => setSeccion(s.id)}
+                className={`relative w-full rounded-campo px-3 py-2 mb-0.5 text-left text-base
+                  transition-colors duration-rapido
+                  ${
+                    seccion === s.id
+                      ? 'bg-azul-50 text-azul-700 font-medium'
+                      : 'text-grafito hover:bg-lienzo hover:text-tinta'
+                  }`}
+              >
+                {seccion === s.id && (
+                  <span className="absolute left-0 top-2 bottom-2 w-[3px] rounded-r bg-azul" />
+                )}
+                {s.etiqueta}
+              </button>
+            </div>
           ))}
         </nav>
 
-        <div className="flex-1 min-w-0 max-w-2xl overflow-y-auto">
+        <div className={`flex-1 min-w-0 overflow-y-auto ${ANCHOS[seccion] || 'max-w-2xl'}`}>
+          {seccion === 'ventas' && <PanelVentas onAviso={onAviso} />}
+
+          {seccion === 'caja' && <PanelCaja onAviso={onAviso} />}
+
           {seccion === 'tarifas' && (
             <section className="panel overflow-hidden">
+              <p className="px-4 py-3 bg-lienzo text-mini text-grafito border-b border-linea">
+                Los precios se aplican al guardar y rigen desde el siguiente cobro. Las salidas ya
+                liquidadas conservan el valor con el que se cobraron.
+              </p>
+
               <Ajuste titulo="Hora iniciada" ayuda="Se cobra la hora completa apenas empieza">
                 <Pesos valor={form.tarifa_hora} onChange={set('tarifa_hora')} />
               </Ajuste>
@@ -133,6 +167,15 @@ export default function Configuracion({ settings, onGuardado, onAviso }) {
               </Ajuste>
               <Ajuste titulo="Tiquete perdido" ayuda="Recargo que se suma al total de la salida">
                 <Pesos valor={form.cargo_ticket_perdido} onChange={set('cargo_ticket_perdido')} />
+              </Ajuste>
+              <Ajuste
+                titulo="Base de caja predeterminada"
+                ayuda="Con cuánto efectivo se abre cada jornada nueva, si nadie la fija a mano"
+              >
+                <Pesos
+                  valor={form.caja_base_predeterminada}
+                  onChange={set('caja_base_predeterminada')}
+                />
               </Ajuste>
             </section>
           )}

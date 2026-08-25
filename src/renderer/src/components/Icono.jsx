@@ -112,6 +112,32 @@ const TRAZOS = {
       <circle cx="12" cy="12" r="8.5" />
       <path d="M14.5 9.2a3 3 0 1 0 0 5.6M12 6.5v11" />
     </>
+  ),
+  efectivo: (
+    <>
+      <rect x="2.5" y="6" width="19" height="12" rx="2" />
+      <circle cx="12" cy="12" r="2.75" />
+      <path d="M6 10v4M18 10v4" />
+    </>
+  ),
+  transferencia: (
+    <>
+      <path d="M3.5 8.5h14M14 5l3.5 3.5L14 12" />
+      <path d="M20.5 15.5h-14M10 12l-3.5 3.5L10 19" />
+    </>
+  ),
+  caja: (
+    <>
+      <path d="M3 8.5 5 4h14l2 4.5" />
+      <rect x="3" y="8.5" width="18" height="11.5" rx="2" />
+      <path d="M9.5 12.5h5" />
+    </>
+  ),
+  grafica: (
+    <>
+      <path d="M4 4v15.5a.5.5 0 0 0 .5.5H20" />
+      <path d="M8 16v-3.5M12 16V8M16 16v-6" />
+    </>
   )
 }
 

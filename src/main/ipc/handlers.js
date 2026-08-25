@@ -4,6 +4,14 @@ import * as vehiculos from '../db/vehiclesRepo.js'
 import * as transacciones from '../db/transactionsRepo.js'
 import { cotizar, liquidar } from '../services/liquidacion.js'
 import {
+  resumenCaja,
+  abrirCaja,
+  cerrarCaja,
+  reabrirCaja,
+  historialCierres,
+  metricasVentas
+} from '../services/caja.js'
+import {
   imprimirRecibo,
   imprimirTiquete,
   imprimirPrueba,
@@ -83,6 +91,15 @@ export function registrarHandlers() {
   // ---------------- Transacciones ----------------
   manejar('transactions:hoy', (fecha = null) => transacciones.transaccionesDelDia(fecha))
   manejar('transactions:ultimas', (limite = 20) => transacciones.ultimasTransacciones(limite))
+
+  // ---------------- Métricas y caja --------------
+  manejar('metricas:ventas', () => metricasVentas())
+
+  manejar('caja:resumen', (fecha) => resumenCaja(fecha || undefined))
+  manejar('caja:abrir', (params) => abrirCaja(params))
+  manejar('caja:cerrar', (params) => cerrarCaja(params))
+  manejar('caja:reabrir', (fecha) => reabrirCaja(fecha || undefined))
+  manejar('caja:cierres', (limite = 14) => historialCierres(limite))
 
   // ---------------- Impresora --------------------
   manejar('printer:estado', () => estadoImpresora(getSettings()))

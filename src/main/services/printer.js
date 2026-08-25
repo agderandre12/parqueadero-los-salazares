@@ -19,6 +19,13 @@ const ETIQUETA_TARIFA = {
   personalizada: 'Personalizada'
 }
 
+// Sin tildes: el recibo debe leerse igual aunque la térmica pierda el juego de
+// caracteres, y esta línea es la que se coteja contra el cierre de caja.
+const ETIQUETA_METODO = {
+  efectivo: 'EFECTIVO',
+  transferencia: 'TRANSFERENCIA'
+}
+
 const pesos = (valor) =>
   '$' + Number(valor || 0).toLocaleString('es-CO', { maximumFractionDigits: 0 })
 
@@ -132,6 +139,10 @@ export async function imprimirRecibo({ settings, vehicle, cobro, transaccion, co
     printer.setTextSize(1, 1)
     printer.leftRight('TOTAL', pesos(cobro.total))
     printer.setTextSize(0, 0)
+    printer.leftRight(
+      'Pago:',
+      ETIQUETA_METODO[transaccion.metodo_pago] || String(transaccion.metodo_pago || '').toUpperCase()
+    )
     printer.bold(false)
 
     // ---- Pie ----

@@ -26,6 +26,16 @@ const api = {
     hoy: (fecha) => invocar('transactions:hoy', fecha),
     ultimas: (limite) => invocar('transactions:ultimas', limite)
   },
+  metricas: {
+    ventas: () => invocar('metricas:ventas')
+  },
+  caja: {
+    resumen: (fecha) => invocar('caja:resumen', fecha),
+    abrir: (params) => invocar('caja:abrir', params),
+    cerrar: (params) => invocar('caja:cerrar', params),
+    reabrir: (fecha) => invocar('caja:reabrir', fecha),
+    cierres: (limite) => invocar('caja:cierres', limite)
+  },
   impresora: {
     estado: () => invocar('printer:estado'),
     prueba: () => invocar('printer:prueba'),

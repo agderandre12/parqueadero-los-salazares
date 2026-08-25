@@ -98,3 +98,26 @@ export const ETIQUETA_TARIFA = {
   mensualidad: 'Mensualidad',
   personalizada: 'Personalizada'
 }
+
+/** Espejo de METODOS_PAGO en `src/main/services/caja.js`. */
+export const METODOS_PAGO = [
+  { id: 'efectivo', etiqueta: 'Efectivo', icono: 'efectivo', ayuda: 'Entra a la caja' },
+  {
+    id: 'transferencia',
+    etiqueta: 'Transferencia',
+    icono: 'transferencia',
+    ayuda: 'No entra a la caja'
+  }
+]
+
+export const ETIQUETA_METODO = {
+  efectivo: 'Efectivo',
+  transferencia: 'Transferencia'
+}
+
+/** '19/08' — eje compacto para la serie diaria de ventas. */
+export function diaCorto(iso) {
+  const d = parseSql(iso)
+  if (!d) return '--'
+  return d.toLocaleDateString('es-CO', { day: '2-digit', month: '2-digit' })
+}

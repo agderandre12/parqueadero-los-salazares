@@ -31,6 +31,9 @@ CREATE TABLE IF NOT EXISTS settings (
   minutos_gracia       INTEGER NOT NULL DEFAULT 10,  -- salida antes de X min => $0
   horas_tope_dia       INTEGER NOT NULL DEFAULT 24,  -- bloque para el tope de amanecida
 
+  -- Caja registradora
+  caja_base_predeterminada INTEGER NOT NULL DEFAULT 0, -- base con la que se abre el día
+
   -- Impresora térmica
   impresora_tipo       TEXT    NOT NULL DEFAULT 'EPSON',  -- EPSON | STAR
   impresora_interface  TEXT    NOT NULL DEFAULT '',       -- ej: printer:POS-58  /  tcp://192.168.1.50
@@ -84,12 +87,33 @@ CREATE TABLE IF NOT EXISTS transactions (
   tipo_tarifa  TEXT    NOT NULL DEFAULT 'hora',
   tipo         TEXT    NOT NULL DEFAULT 'normal'
                  CHECK (tipo IN ('normal','ticket_perdido')),
+  -- 'efectivo' entra al cajón físico; 'transferencia' va a cuentas digitales y
+  -- por eso cuenta en las ventas pero NO en el saldo de la caja.
+  metodo_pago  TEXT    NOT NULL DEFAULT 'efectivo'
+                 CHECK (metodo_pago IN ('efectivo','transferencia')),
   fecha        TEXT    NOT NULL DEFAULT (datetime('now','localtime')),
   impreso      INTEGER NOT NULL DEFAULT 0
 );
 
 CREATE INDEX IF NOT EXISTS idx_transactions_fecha   ON transactions (fecha DESC);
 CREATE INDEX IF NOT EXISTS idx_transactions_vehicle ON transactions (vehicle_id);
+CREATE INDEX IF NOT EXISTS idx_transactions_metodo  ON transactions (metodo_pago);
+
+-- ------------------------------------------------------------
+-- caja_dias: una fila por jornada. Guarda sólo lo que un humano decide
+-- (la base con la que se abre y el conteo físico del cierre); el efectivo
+-- del día NO se guarda aquí, se deriva siempre de `transactions` para que
+-- no puedan quedar dos verdades distintas del mismo dinero.
+-- ------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS caja_dias (
+  fecha          TEXT    PRIMARY KEY,             -- 'YYYY-MM-DD' (hora local)
+  base_inicial   INTEGER NOT NULL DEFAULT 0,
+  abierta_at     TEXT    NOT NULL DEFAULT (datetime('now','localtime')),
+  cerrada_at     TEXT,                            -- NULL mientras la jornada siga abierta
+  conteo_final   INTEGER,                         -- dinero físico contado al cerrar
+  diferencia     INTEGER,                         -- conteo_final - esperado (sobrante/faltante)
+  observaciones  TEXT    NOT NULL DEFAULT ''
+);
 
 -- ------------------------------------------------------------
 -- Semilla de configuración

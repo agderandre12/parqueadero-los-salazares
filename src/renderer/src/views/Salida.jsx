@@ -7,7 +7,9 @@ import {
   hora,
   normalizarPlaca,
   transcurrido,
-  ETIQUETA_TARIFA
+  ETIQUETA_METODO,
+  ETIQUETA_TARIFA,
+  METODOS_PAGO
 } from '../lib/format.js'
 
 /*
@@ -25,9 +27,13 @@ export default function Salida({ placaInicial, ahora, onLiquidado, onAviso }) {
   const [datos, setDatos] = useState(null) // { vehicle, settings, cobro }
   const [recibo, setRecibo] = useState(null)
   const [ticketPerdido, setTicketPerdido] = useState(false)
+  // Sin valor por defecto a propósito: el método de pago decide si el dinero
+  // entra o no a la caja, así que tiene que ser una decisión explícita.
+  const [metodoPago, setMetodoPago] = useState(null)
   const buscadorRef = useRef(null)
 
   const cargoTicket = datos?.settings?.cargo_ticket_perdido ?? 2000
+  const puedeCobrar = fase === 'listo' && Boolean(metodoPago)
 
   /** Cotiza una placa concreta y la deja lista para cobrar. */
   const cotizar = useCallback(async (placa, conRecargo) => {
@@ -83,11 +89,16 @@ export default function Salida({ placaInicial, ahora, onLiquidado, onAviso }) {
   const cobrar = useCallback(
     async (imprimir) => {
       if (fase !== 'listo' || !datos) return
+      if (!metodoPago) {
+        onAviso?.({ tipo: 'error', texto: 'Seleccione el método de pago antes de cobrar' })
+        return
+      }
       setFase('cobrando')
 
       const res = await window.api.vehiculos.liquidar({
         vehicleId: datos.vehicle.id,
-        ticketPerdido
+        ticketPerdido,
+        metodoPago
       })
 
       if (!res.ok) {
@@ -114,7 +125,7 @@ export default function Salida({ placaInicial, ahora, onLiquidado, onAviso }) {
         }
       }
     },
-    [fase, datos, ticketPerdido, onLiquidado, onAviso]
+    [fase, datos, ticketPerdido, metodoPago, onLiquidado, onAviso]
   )
 
   function limpiar() {
@@ -123,6 +134,7 @@ export default function Salida({ placaInicial, ahora, onLiquidado, onAviso }) {
     setRecibo(null)
     setError(null)
     setTicketPerdido(false)
+    setMetodoPago(null)
     setFase('vacio')
     setTimeout(() => buscadorRef.current?.focus(), 0)
   }
@@ -172,7 +184,14 @@ export default function Salida({ placaInicial, ahora, onLiquidado, onAviso }) {
                 }
               }}
               onKeyDown={(e) => {
-                if (e.key === 'Enter' && fase !== 'listo' && fase !== 'hecho') {
+                // Menos de 3 caracteres no puede ser una placa real: evita
+                // mandar una consulta que sólo va a devolver error.
+                if (
+                  e.key === 'Enter' &&
+                  fase !== 'listo' &&
+                  fase !== 'hecho' &&
+                  (texto.length >= 3 || sugerencias.length === 1)
+                ) {
                   e.preventDefault()
                   cotizar(sugerencias.length === 1 ? sugerencias[0].placa : texto, ticketPerdido)
                 }
@@ -323,7 +342,28 @@ export default function Salida({ placaInicial, ahora, onLiquidado, onAviso }) {
 
               {fase === 'hecho' ? (
                 <>
-                  <div className="mt-5 rounded-campo border border-linea bg-lienzo px-3 py-3">
+                  <div className="mt-4 flex items-center justify-between rounded-campo border border-linea px-3 py-2.5">
+                    <span className="flex items-center gap-2 text-base font-medium">
+                      <Icono
+                        nombre={
+                          recibo.transaccion.metodo_pago === 'efectivo'
+                            ? 'efectivo'
+                            : 'transferencia'
+                        }
+                        tam={16}
+                        className="text-azul-700"
+                      />
+                      {ETIQUETA_METODO[recibo.transaccion.metodo_pago] ||
+                        recibo.transaccion.metodo_pago}
+                    </span>
+                    <span className="text-micro text-grafito">
+                      {recibo.transaccion.metodo_pago === 'efectivo'
+                        ? 'Sumado a la caja'
+                        : 'A cuentas digitales'}
+                    </span>
+                  </div>
+
+                  <div className="mt-2 rounded-campo border border-linea bg-lienzo px-3 py-3">
                     <p className="text-base font-medium flex items-center gap-2">
                       <Icono nombre="visto" tam={16} className="text-azul-700" />
                       Recibo N.° <span className="num">
@@ -351,11 +391,40 @@ export default function Salida({ placaInicial, ahora, onLiquidado, onAviso }) {
                 </>
               ) : (
                 <>
+                  <fieldset className="mt-5" disabled={fase === 'cobrando'}>
+                    <legend className="etiqueta">Método de pago</legend>
+                    <div className="grid grid-cols-2 gap-1.5">
+                      {METODOS_PAGO.map((m) => {
+                        const activo = metodoPago === m.id
+                        return (
+                          <button
+                            key={m.id}
+                            type="button"
+                            aria-pressed={activo}
+                            onClick={() => setMetodoPago(m.id)}
+                            className={`flex flex-col items-center gap-1 rounded-campo border px-2 py-3
+                              transition-colors duration-rapido ease-salida
+                              disabled:opacity-45 disabled:cursor-not-allowed
+                              ${
+                                activo
+                                  ? 'border-azul bg-azul-50 text-azul-700'
+                                  : 'border-linea-fuerte text-grafito hover:border-niebla hover:bg-lienzo'
+                              }`}
+                          >
+                            <Icono nombre={m.icono} tam={19} />
+                            <span className="text-base font-medium">{m.etiqueta}</span>
+                            <span className="text-micro text-niebla">{m.ayuda}</span>
+                          </button>
+                        )
+                      })}
+                    </div>
+                  </fieldset>
+
                   <button
                     type="button"
                     onClick={() => cobrar(true)}
-                    disabled={fase !== 'listo'}
-                    className="btn-azul w-full py-3.5 mt-5"
+                    disabled={!puedeCobrar}
+                    className="btn-azul w-full py-3.5 mt-3"
                   >
                     <Icono nombre="impresora" tam={17} />
                     {fase === 'cobrando' ? 'Cobrando…' : 'Cobrar e imprimir'}
@@ -363,11 +432,17 @@ export default function Salida({ placaInicial, ahora, onLiquidado, onAviso }) {
                   <button
                     type="button"
                     onClick={() => cobrar(false)}
-                    disabled={fase !== 'listo'}
+                    disabled={!puedeCobrar}
                     className="btn-fantasma w-full mt-1.5 text-mini"
                   >
                     Cobrar sin imprimir
                   </button>
+
+                  {fase === 'listo' && !metodoPago && (
+                    <p className="mt-2 text-center text-micro text-niebla">
+                      Escoja cómo paga el cliente para habilitar el cobro.
+                    </p>
+                  )}
                 </>
               )}
             </>
