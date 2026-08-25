@@ -16,6 +16,7 @@ const TITULOS = {
   entrada: 'Nueva entrada',
   salida: 'Registrar salida',
   vehiculos: 'Vehículos',
+  metricas: 'Métricas y caja',
   ajustes: 'Configuración'
 }
 
@@ -178,9 +179,12 @@ export default function App() {
             />
           )}
 
-          {vista === 'ajustes' && (
+          {/* Una sola vista con dos puertas: el rail entra por las métricas y
+              el engranaje por los precios. */}
+          {(vista === 'metricas' || vista === 'ajustes') && (
             <Configuracion
               settings={ajustes}
+              seccionInicial={vista === 'metricas' ? 'ventas' : 'tarifas'}
               onGuardado={(nuevo) => {
                 setAjustes(nuevo)
                 refrescar()

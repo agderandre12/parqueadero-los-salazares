@@ -1,6 +1,12 @@
 import CeldasGrid from '../components/CeldasGrid.jsx'
 import Icono from '../components/Icono.jsx'
-import { cop, fechaLarga, hora, transcurridoCorto } from '../lib/format.js'
+import { fechaLarga, hora, transcurridoCorto } from '../lib/format.js'
+
+/*
+ * El panel es la pantalla de operación: celdas, entradas y salidas. El dinero
+ * no vive aquí — las ventas y la caja están en Métricas y configuración, que
+ * es donde entra el administrador, no el operario de turno.
+ */
 
 function Cifra({ etiqueta, valor }) {
   return (
@@ -48,7 +54,7 @@ export default function Panel({ stats, celdas, sinCelda, ultimos, ahora, onIr, o
           <div className="flex gap-7 text-right shrink-0">
             <Cifra etiqueta="Entradas hoy" valor={stats.entradasHoy} />
             <Cifra etiqueta="Salidas hoy" valor={stats.salidasHoy} />
-            <Cifra etiqueta="Recaudo hoy" valor={cop(stats.recaudoHoy)} />
+            <Cifra etiqueta="Ocupadas" valor={stats.ocupadas} />
           </div>
         </header>
 

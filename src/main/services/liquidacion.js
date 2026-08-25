@@ -2,7 +2,9 @@ import { enTransaccion } from '../db/index.js'
 import { getSettings } from '../db/settingsRepo.js'
 import * as vehiculos from '../db/vehiclesRepo.js'
 import * as transacciones from '../db/transactionsRepo.js'
+import * as cajaRepo from '../db/cajaRepo.js'
 import { calcularCobro } from './pricing.js'
+import { normalizarMetodoPago } from './caja.js'
 import { imprimirRecibo } from './printer.js'
 import { ahoraSql } from './tiempo.js'
 
@@ -22,12 +24,16 @@ export function cotizar({ placa, ticketPerdido = false }) {
  * Liquida la salida: cierra el vehículo (libera la celda), guarda la
  * transacción y manda a imprimir el recibo.
  *
+ * `metodoPago` es obligatorio ('efectivo' | 'transferencia'): de él depende si
+ * el cobro entra o no al saldo físico de la caja registradora.
+ *
  * El cierre en base de datos es atómico. La impresión ocurre después y nunca
  * revierte el cobro: si la impresora falla, la salida ya quedó registrada y el
  * resultado lo informa en `impresion`.
  */
-export async function liquidar({ vehicleId, placa, ticketPerdido = false }) {
+export async function liquidar({ vehicleId, placa, ticketPerdido = false, metodoPago }) {
   const settings = getSettings()
+  const metodo = normalizarMetodoPago(metodoPago)
 
   const vehicle = vehicleId
     ? vehiculos.obtenerPorId(vehicleId)
@@ -49,8 +55,19 @@ export async function liquidar({ vehicleId, placa, ticketPerdido = false }) {
       minutos: cobro.minutos,
       tipo_tarifa: cobro.tipoTarifa,
       tipo: ticketPerdido ? 'ticket_perdido' : 'normal',
+      metodo_pago: metodo,
       fecha: salida
     })
+
+    /*
+     * Si es efectivo, el dinero acaba de entrar al cajón: la jornada tiene que
+     * existir aunque nadie haya abierto la caja hoy. El saldo se deriva de las
+     * transacciones, así que basta con garantizar la fila y su base.
+     */
+    if (metodo === 'efectivo') {
+      cajaRepo.asegurarDia(salida.slice(0, 10), settings.caja_base_predeterminada)
+    }
+
     return { vehicle: actualizado, transaccion: registro }
   })
 

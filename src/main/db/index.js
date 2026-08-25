@@ -29,8 +29,35 @@ export function getDb() {
   db.exec('PRAGMA journal_mode = WAL')
   db.exec('PRAGMA foreign_keys = ON')
   db.exec(schemaSql)
+  migrar(db)
 
   return db
+}
+
+/*
+ * El esquema se aplica con CREATE TABLE IF NOT EXISTS, así que una base que ya
+ * existe en el equipo del cliente nunca recibe columnas nuevas. Aquí se agregan
+ * a mano, comprobando antes si ya están.
+ *
+ * SQLite no permite CHECK en un ALTER TABLE ADD COLUMN: en las bases migradas
+ * la restricción de `metodo_pago` la garantiza la validación de
+ * `services/caja.js`, no el motor.
+ */
+function migrar(conexion) {
+  const columnas = (tabla) =>
+    new Set(conexion.prepare(`PRAGMA table_info(${tabla})`).all().map((c) => c.name))
+
+  if (!columnas('transactions').has('metodo_pago')) {
+    conexion.exec(
+      `ALTER TABLE transactions ADD COLUMN metodo_pago TEXT NOT NULL DEFAULT 'efectivo'`
+    )
+  }
+
+  if (!columnas('settings').has('caja_base_predeterminada')) {
+    conexion.exec(
+      'ALTER TABLE settings ADD COLUMN caja_base_predeterminada INTEGER NOT NULL DEFAULT 0'
+    )
+  }
 }
 
 /**

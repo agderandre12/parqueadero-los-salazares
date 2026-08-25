@@ -22,3 +22,8 @@ export function desdeTextoSql(texto) {
 export function ahoraSql() {
   return aTextoSql(new Date())
 }
+
+/** 'YYYY-MM-DD' local: la clave con la que se identifica una jornada de caja. */
+export function hoySql(fecha = new Date()) {
+  return aTextoSql(fecha).slice(0, 10)
+}

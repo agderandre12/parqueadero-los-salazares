@@ -11,7 +11,8 @@ export const VISTAS = [
   { id: 'panel', etiqueta: 'Panel', icono: 'panel', tecla: 'F1' },
   { id: 'entrada', etiqueta: 'Nueva entrada', icono: 'entrada', tecla: 'F2' },
   { id: 'salida', etiqueta: 'Registrar salida', icono: 'salida', tecla: 'F3' },
-  { id: 'vehiculos', etiqueta: 'Vehículos', icono: 'vehiculos', tecla: 'F4' }
+  { id: 'vehiculos', etiqueta: 'Vehículos', icono: 'vehiculos', tecla: 'F4' },
+  { id: 'metricas', etiqueta: 'Métricas y caja', icono: 'grafica', tecla: 'F5' }
 ]
 
 function Boton({ vista, activa, onIr }) {
