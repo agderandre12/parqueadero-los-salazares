@@ -1,4 +1,4 @@
-import { celda as fmtCelda, hora, transcurridoCorto, transcurrido } from '../lib/format.js'
+import { celda as fmtCelda, hora, permanencia } from '../lib/format.js'
 
 /*
  * Mapa de celdas.
@@ -14,7 +14,7 @@ export default function CeldasGrid({ celdas, sinCelda = [], ahora, onSeleccionar
     <div>
       <div
         className="grid gap-1.5"
-        style={{ gridTemplateColumns: 'repeat(auto-fill, minmax(66px, 1fr))' }}
+        style={{ gridTemplateColumns: 'repeat(auto-fill, minmax(68px, 1fr))' }}
       >
         {celdas.map((c) => {
           if (!c.ocupada) {
@@ -35,7 +35,7 @@ export default function CeldasGrid({ celdas, sinCelda = [], ahora, onSeleccionar
               key={c.numero}
               type="button"
               onClick={() => onSeleccionar?.(c.placa)}
-              title={`${c.placa} · entró ${hora(c.horaEntrada)} · ${transcurrido(c.horaEntrada, ahora)}`}
+              title={`${c.placa} · entró ${hora(c.horaEntrada)} · ${permanencia(c.tipoTarifa, c.horaEntrada, ahora, { corto: false })}`}
               className="group relative aspect-[5/4] rounded-lg bg-tinta-800 p-1.5
                          flex flex-col justify-between text-left text-blanco
                          transition-colors duration-rapido ease-salida
@@ -44,8 +44,14 @@ export default function CeldasGrid({ celdas, sinCelda = [], ahora, onSeleccionar
               <span className="text-micro font-medium text-humo num">{fmtCelda(c.numero)}</span>
               <span>
                 <span className="block placa text-mini leading-tight">{c.placa}</span>
-                <span className="block text-micro text-humo num leading-tight">
-                  {transcurridoCorto(c.horaEntrada, ahora)}
+                {/* "Mensualidad" no cabe con la letra micro: a 10 px y apretada cabe
+                    justo en la celda mínima de 68 px. */}
+                <span
+                  className={`block text-humo num leading-tight truncate ${
+                    c.tipoTarifa === 'mensualidad' ? 'text-[10px] tracking-tighter' : 'text-micro'
+                  }`}
+                >
+                  {permanencia(c.tipoTarifa, c.horaEntrada, ahora)}
                 </span>
               </span>
             </button>

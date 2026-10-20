@@ -84,6 +84,16 @@ export function transcurridoCorto(texto, ahora = new Date()) {
   return h === 0 ? `${min}m` : `${h}h ${min % 60}m`
 }
 
+/**
+ * Lo que se muestra como permanencia de una moto que está adentro. La
+ * mensualidad ya se pagó al entrar: su tiempo no cambia nada, así que en lugar
+ * del reloj se ve la palabra.
+ */
+export function permanencia(tipoTarifa, horaEntrada, ahora, { corto = true } = {}) {
+  if (tipoTarifa === 'mensualidad') return 'Mensualidad'
+  return corto ? transcurridoCorto(horaEntrada, ahora) : transcurrido(horaEntrada, ahora)
+}
+
 export const normalizarPlaca = (p) =>
   String(p || '')
     .toUpperCase()

@@ -12,8 +12,17 @@ import { tmpdir } from 'os'
 import { getDb, closeDb } from '../src/main/db/index.js'
 import * as vehiculos from '../src/main/db/vehiclesRepo.js'
 import * as transacciones from '../src/main/db/transactionsRepo.js'
-import { getSettings } from '../src/main/db/settingsRepo.js'
+import { getSettings, updateSettings } from '../src/main/db/settingsRepo.js'
 import { cotizar, liquidar } from '../src/main/services/liquidacion.js'
+import {
+  componerRecibo,
+  componerTiquete,
+  generarBytes,
+  imprimirTiquete,
+  plegar
+} from '../src/main/services/printer.js'
+import { nombreCola } from '../src/main/services/colaWindows.js'
+import { registrarEntrada, cobroMensualidad } from '../src/main/services/entrada.js'
 import {
   abrirCaja,
   cerrarCaja,
@@ -152,14 +161,65 @@ async function correr() {
     '1 hora + recargo'
   )
 
-  console.log('\nOtras tarifas')
-  const vMes = entradaHace('MEN001', 5, { tipo_tarifa: 'mensualidad' })
+  console.log('\nMensualidad: se cobra al entrar')
+  const transaccionesAntes = transacciones.ultimasTransacciones(100).length
+
+  let sinMetodoMes = null
+  await registrarEntrada({ placa: 'MEN002', tipo_tarifa: 'mensualidad' }).catch(
+    (e) => (sinMetodoMes = e)
+  )
+  ok(sinMetodoMes !== null, 'la mensualidad exige método de pago')
+  ok(!vehiculos.buscarActivoPorPlaca('MEN002'), 'sin método de pago la moto no queda adentro')
+
+  // Comprobante obligatorio: se intenta imprimir aunque la impresión automática esté apagada.
+  updateSettings({ imprimir_automatico: 0 })
+  const mes = await registrarEntrada({
+    placa: 'MEN001',
+    tipo_tarifa: 'mensualidad',
+    metodoPago: 'transferencia',
+    hora_entrada: aTextoSql(new Date(Date.now() - 5 * 3600000))
+  })
+  updateSettings({ imprimir_automatico: 1 })
+  iguales(mes.vehicle.estado, 'activo', 'la moto de mensualidad queda adentro')
+  iguales(mes.transaccion.monto, settings.tarifa_mensualidad, 'la venta es la tarifa de mensualidad')
+  iguales(mes.transaccion.metodo_pago, 'transferencia', 'con el método de pago escogido')
+  iguales(mes.transaccion.tipo_tarifa, 'mensualidad', 'marcada como mensualidad')
+  iguales(mes.transaccion.fecha, mes.vehicle.hora_entrada, 'con la fecha de la entrada')
   iguales(
-    (await liquidar({ vehicleId: vMes.id, metodoPago: 'efectivo' })).transaccion.monto,
-    0,
-    'mensualidad no cobra a la salida'
+    mes.impresion.motivo,
+    'Impresora no configurada',
+    'el comprobante se intenta imprimir aunque la impresión automática esté apagada'
   )
 
+  let dobleMes = null
+  await registrarEntrada({ placa: 'MEN001', tipo_tarifa: 'mensualidad', metodoPago: 'efectivo' }).catch(
+    (e) => (dobleMes = e)
+  )
+  ok(dobleMes !== null, 'no deja entrar dos veces la misma placa de mensualidad')
+  iguales(
+    transacciones.ultimasTransacciones(100).length,
+    transaccionesAntes + 1,
+    'una entrada rechazada no deja venta (operación atómica)'
+  )
+
+  const cotMes = cotizar({ placa: 'MEN001', ticketPerdido: true })
+  iguales(cotMes.cobro.total, 0, 'a la salida no se cobra nada, ni el tiquete perdido')
+  const salidaMes = await liquidar({ vehicleId: mes.vehicle.id })
+  iguales(salidaMes.vehicle.estado, 'finalizado', 'la salida no pide método de pago')
+  iguales(salidaMes.transaccion, null, 'la salida no registra otra venta')
+  iguales(
+    transacciones.ultimasTransacciones(100).length,
+    transaccionesAntes + 1,
+    'la mensualidad deja una sola venta'
+  )
+
+  const hora1 = await registrarEntrada({
+    placa: 'HOR001',
+    hora_entrada: aTextoSql(new Date(Date.now() - 2 * 3600000))
+  })
+  iguales(hora1.transaccion, null, 'una entrada por hora no cobra al entrar')
+
+  console.log('\nOtras tarifas')
   const vPers = entradaHace('PER001', 5, { tipo_tarifa: 'personalizada', tarifa_personalizada: 5000 })
   iguales(
     (await liquidar({ vehicleId: vPers.id, metodoPago: 'efectivo' })).transaccion.monto,
@@ -176,8 +236,9 @@ async function correr() {
   await liquidar({ vehicleId: vTope.id, metodoPago: 'efectivo' })
 
   console.log('\nMétodos de pago y métricas')
-  const efectivoEsperado = 3 * settings.tarifa_hora + 0 + 5000 + settings.tarifa_amanecida
-  const transferenciaEsperada = settings.tarifa_hora + settings.cargo_ticket_perdido
+  const efectivoEsperado = 3 * settings.tarifa_hora + 5000 + settings.tarifa_amanecida
+  const transferenciaEsperada =
+    settings.tarifa_hora + settings.cargo_ticket_perdido + settings.tarifa_mensualidad
 
   const ventas = metricasVentas()
   iguales(ventas.dia.efectivo, efectivoEsperado, 'las ventas del día suman sólo el efectivo')
@@ -229,6 +290,112 @@ async function correr() {
     'ABC12D',
     'los últimos ingresos vienen del más reciente al más antiguo'
   )
+
+  console.log('\nTiquete y recibo')
+  const ajustes = getSettings()
+  ok(
+    ajustes.politicas_tiquete.includes('Cascos en custodia'),
+    'una base nueva trae las políticas del tiquete'
+  )
+  ok(
+    ajustes.politicas_tiquete.includes('{ticket_perdido}'),
+    'las políticas guardan el marcador del recargo, no un valor fijo'
+  )
+  ok(
+    Boolean(ajustes.direccion && ajustes.telefono && ajustes.horario),
+    'una base nueva trae dirección, teléfono y horario'
+  )
+
+  // Los bytes ESC/POS se leen como latin1: los textos sin tildes se ven tal cual.
+  const bytes = (componer) => generarBytes(ajustes, componer).then((b) => b.toString('latin1'))
+  const comando = (...b) => Buffer.from(b).toString('latin1')
+
+  const tiquete = await bytes((p) => componerTiquete(p, { settings: ajustes, vehicle: v3 }))
+  ok(tiquete.includes('TIQUETE DE ENTRADA'), 'el tiquete se arma sin impresora conectada')
+  ok(tiquete.includes(v3.placa), 'lleva la placa')
+  ok(tiquete.includes(ajustes.telefono), 'lleva el teléfono del negocio')
+  ok(tiquete.includes('Cisneros'), 'lleva la dirección del negocio')
+  ok(tiquete.includes('Entrada:'), 'lleva la hora de entrada')
+  ok(tiquete.includes('$2.000'), 'las políticas muestran el recargo vigente')
+  ok(!tiquete.includes('{ticket_perdido}'), 'no queda el marcador sin reemplazar')
+  ok(
+    tiquete.includes(comando(0x1d, 0x6b, 73, v3.placa.length + 2) + `{B${v3.placa}`),
+    'el código de barras es Code 128 con la placa'
+  )
+  ok(tiquete.includes(comando(0x1d, 0x68, 140)), 'las barras miden 140 puntos de alto')
+  ok(
+    tiquete.includes(comando(0x1d, 0x77, 3)),
+    'placa de 6 caracteres en 58 mm: módulo de 3 puntos'
+  )
+
+  const largo = await bytes((p) =>
+    componerTiquete(p, { settings: ajustes, vehicle: { ...v3, placa: 'ABC123D' } })
+  )
+  ok(
+    largo.includes(comando(0x1d, 0x77, 2)),
+    'placa de 7 caracteres: módulo de 2 para que quepa con margen'
+  )
+
+  const lineas = plegar(ajustes.politicas_tiquete, 32)
+  ok(
+    lineas.every((l) => l.length <= 32),
+    'las políticas se parten en renglones de 32 caracteres'
+  )
+  iguales(
+    lineas.join(' ').split(/\s+/).length,
+    ajustes.politicas_tiquete.split(/\s+/).length,
+    'partir renglones no pierde palabras'
+  )
+  iguales(plegar('ABCDEFGHIJ', 4).join('|'), 'ABCD|EFGH|IJ', 'una palabra más larga que el renglón se parte')
+
+  const recibo = await bytes((p) =>
+    componerRecibo(p, {
+      settings: ajustes,
+      vehicle: res.vehicle,
+      cobro: res.cobro,
+      transaccion: res.transaccion
+    })
+  )
+  ok(recibo.includes('Salida:'), 'el recibo lleva la hora de salida')
+  ok(recibo.includes('RECIBO No. 000001'), 'el recibo lleva su número')
+  ok(recibo.includes('EFECTIVO'), 'el recibo lleva el método de pago')
+
+  const comprobante = await bytes((p) =>
+    componerRecibo(p, {
+      settings: ajustes,
+      vehicle: mes.vehicle,
+      transaccion: mes.transaccion,
+      cobro: cobroMensualidad(mes.transaccion)
+    })
+  )
+  ok(comprobante.includes(`RECIBO No. ${String(mes.transaccion.id).padStart(6, '0')}`), 'el comprobante de mensualidad lleva su número')
+  ok(comprobante.includes('Mensualidad') && comprobante.includes('$60.000'), 'y el valor de la mensualidad')
+  ok(
+    !comprobante.includes('Salida:') && !comprobante.includes('Pago:') && !comprobante.includes('TRANSFERENCIA'),
+    'sin hora de salida ni método de pago'
+  )
+  ok(!comprobante.includes(comando(0x1d, 0x6b)), 'sin código de barras')
+
+  updateSettings({ politicas_tiquete: '' })
+  const sinPoliticas = await bytes((p) =>
+    componerTiquete(p, { settings: getSettings(), vehicle: v3 })
+  )
+  ok(!sinPoliticas.includes('Cascos'), 'con las políticas vacías el tiquete sale sin ellas')
+  closeDb()
+  getDb()
+  iguales(getSettings().politicas_tiquete, '', 'borrar las políticas no las vuelve a sembrar')
+
+  console.log('\nEnvío a la impresora')
+  iguales(nombreCola(' printer:JAL58M '), 'JAL58M', 'acepta el nombre con el prefijo printer:')
+  iguales(nombreCola('POS-58'), 'POS-58', 'y sin el prefijo')
+  if (process.platform === 'win32') {
+    const fallo = await imprimirTiquete({
+      settings: { ...ajustes, impresora_interface: 'printer:NoExiste Parqueadero Prueba' },
+      vehicle: v3
+    })
+    iguales(fallo.ok, false, 'imprimir en una impresora inexistente no lanza')
+    ok(/No existe una impresora/.test(fallo.motivo || ''), 'y explica qué pasó', fallo.motivo)
+  }
 
   closeDb()
 }

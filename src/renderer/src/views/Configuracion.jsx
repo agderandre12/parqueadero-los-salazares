@@ -20,11 +20,15 @@ const SECCIONES = [
   { id: 'negocio', etiqueta: 'Negocio', grupo: 'Configuración' },
   { id: 'capacidad', etiqueta: 'Capacidad', grupo: 'Configuración' },
   { id: 'impresora', etiqueta: 'Impresora', grupo: 'Configuración' },
+  { id: 'tiquete', etiqueta: 'Tiquete', grupo: 'Configuración' },
   { id: 'escaner', etiqueta: 'Escáner', grupo: 'Configuración' }
 ]
 
 // Las métricas ocupan tres columnas; los ajustes se leen mejor angostos.
 const ANCHOS = { ventas: 'max-w-4xl', caja: 'max-w-3xl' }
+
+// Opción del selector de impresora que abre el campo para escribir a mano.
+const OTRA_IMPRESORA = '__otra__'
 
 /** Fila de ajuste: nombre y explicación a la izquierda, control a la derecha. */
 function Ajuste({ titulo, ayuda, children, ancho = 'w-40' }) {
@@ -60,10 +64,25 @@ export default function Configuracion({ settings, seccionInicial = 'tarifas', on
   const [form, setForm] = useState(settings || {})
   const [guardando, setGuardando] = useState(false)
   const [probando, setProbando] = useState(false)
+  const [instaladas, setInstaladas] = useState(null)
+  const [conexionManual, setConexionManual] = useState(false)
 
   useEffect(() => {
     if (settings) setForm(settings)
   }, [settings])
+
+  // La lista se pide al entrar a la sección: así aparece una impresora que se
+  // acaba de instalar sin reiniciar la aplicación.
+  useEffect(() => {
+    if (seccion !== 'impresora') return
+    let vigente = true
+    window.api.impresora.lista().then((res) => {
+      if (vigente) setInstaladas(res.ok ? res.data : [])
+    })
+    return () => {
+      vigente = false
+    }
+  }, [seccion])
 
   // El rail entra por "Métricas" y el engranaje por "Precios": la misma vista
   // se abre en la sección que pidió quien navegó.
@@ -92,7 +111,8 @@ export default function Configuracion({ settings, seccionInicial = 'tarifas', on
   async function probarImpresora() {
     setProbando(true)
     // Se guarda primero: la prueba usa la configuración de la base de datos.
-    await window.api.settings.update(form)
+    const guardado = await window.api.settings.update(form)
+    if (guardado.ok) onGuardado?.(guardado.data)
     const res = await window.api.impresora.prueba()
     setProbando(false)
 
@@ -110,6 +130,11 @@ export default function Configuracion({ settings, seccionInicial = 'tarifas', on
   if (!settings) {
     return <p className="p-8 text-mini text-niebla">Cargando configuración…</p>
   }
+
+  const conexion = String(form.impresora_interface ?? '')
+  const nombreConexion = conexion.replace(/^printer:/i, '').trim()
+  const enLista = Boolean(instaladas?.some((p) => p.nombre === nombreConexion))
+  const escribiendoConexion = conexionManual || (Boolean(conexion) && instaladas !== null && !enLista)
 
   return (
     <div className="h-full flex flex-col overflow-hidden">
@@ -162,7 +187,10 @@ export default function Configuracion({ settings, seccionInicial = 'tarifas', on
               >
                 <Pesos valor={form.tarifa_amanecida} onChange={set('tarifa_amanecida')} />
               </Ajuste>
-              <Ajuste titulo="Mensualidad" ayuda="Estos vehículos salen sin pagar nada">
+              <Ajuste
+                titulo="Mensualidad"
+                ayuda="Se cobra al registrar la entrada, con su comprobante; a la salida no se cobra nada"
+              >
                 <Pesos valor={form.tarifa_mensualidad} onChange={set('tarifa_mensualidad')} />
               </Ajuste>
               <Ajuste titulo="Tiquete perdido" ayuda="Recargo que se suma al total de la salida">
@@ -228,7 +256,11 @@ export default function Configuracion({ settings, seccionInicial = 'tarifas', on
 
           {seccion === 'negocio' && (
             <section className="panel overflow-hidden">
-              <Ajuste titulo="Nombre" ayuda="Aparece en la barra superior y en el recibo" ancho="w-64">
+              <Ajuste
+                titulo="Nombre"
+                ayuda="Aparece en la barra superior, el tiquete y el recibo"
+                ancho="w-64"
+              >
                 <input
                   value={form.nombre_parqueadero ?? ''}
                   onChange={(e) => set('nombre_parqueadero')(e.target.value)}
@@ -243,7 +275,7 @@ export default function Configuracion({ settings, seccionInicial = 'tarifas', on
                   className="campo num"
                 />
               </Ajuste>
-              <Ajuste titulo="Dirección" ancho="w-64">
+              <Ajuste titulo="Dirección" ayuda="Sale en el tiquete y el recibo" ancho="w-64">
                 <input
                   value={form.direccion ?? ''}
                   onChange={(e) => set('direccion')(e.target.value)}
@@ -251,12 +283,24 @@ export default function Configuracion({ settings, seccionInicial = 'tarifas', on
                   className="campo"
                 />
               </Ajuste>
-              <Ajuste titulo="Teléfono" ancho="w-64">
+              <Ajuste titulo="Teléfono" ayuda="Sale en el tiquete y el recibo" ancho="w-64">
                 <input
                   value={form.telefono ?? ''}
                   onChange={(e) => set('telefono')(e.target.value)}
                   placeholder="3226746848"
                   className="campo num"
+                />
+              </Ajuste>
+              <Ajuste
+                titulo="Horario de atención"
+                ayuda="Sale en el tiquete y el recibo. Déjelo vacío para no imprimirlo."
+                ancho="w-64"
+              >
+                <input
+                  value={form.horario ?? ''}
+                  onChange={(e) => set('horario')(e.target.value)}
+                  placeholder="7:00 a. m. - 9:00 p. m."
+                  className="campo"
                 />
               </Ajuste>
               <Ajuste titulo="Mensaje del recibo" ayuda="Última línea del papel" ancho="w-64">
@@ -300,17 +344,42 @@ export default function Configuracion({ settings, seccionInicial = 'tarifas', on
           {seccion === 'impresora' && (
             <section className="panel overflow-hidden">
               <Ajuste
-                titulo="Conexión"
-                ayuda="Nombre en Windows: printer:JAL58M — o por red: tcp://192.168.1.50"
+                titulo="Impresora"
+                ayuda="La térmica tal como aparece en Windows. Si no está en la lista, instale primero su driver."
                 ancho="w-64"
               >
-                <input
-                  value={form.impresora_interface ?? ''}
-                  onChange={(e) => set('impresora_interface')(e.target.value)}
-                  placeholder="printer:JAL58M"
+                <select
+                  value={escribiendoConexion ? OTRA_IMPRESORA : enLista ? nombreConexion : ''}
+                  onChange={(e) => {
+                    const valor = e.target.value
+                    if (valor === OTRA_IMPRESORA) {
+                      setConexionManual(true)
+                      return
+                    }
+                    setConexionManual(false)
+                    set('impresora_interface')(valor)
+                  }}
                   className="campo"
-                  spellCheck={false}
-                />
+                >
+                  <option value="">
+                    {instaladas === null ? 'Buscando impresoras…' : '— Escoja la impresora —'}
+                  </option>
+                  {instaladas?.map((p) => (
+                    <option key={p.nombre} value={p.nombre}>
+                      {p.etiqueta}
+                    </option>
+                  ))}
+                  <option value={OTRA_IMPRESORA}>Otra · por red (tcp://…)</option>
+                </select>
+                {escribiendoConexion && (
+                  <input
+                    value={conexion}
+                    onChange={(e) => set('impresora_interface')(e.target.value)}
+                    placeholder="tcp://192.168.1.50"
+                    className="campo mt-2"
+                    spellCheck={false}
+                  />
+                )}
               </Ajuste>
               <Ajuste titulo="Perfil de comandos" ayuda="La JAL58M usa ESC/POS: deje EPSON" ancho="w-40">
                 <select
@@ -322,7 +391,7 @@ export default function Configuracion({ settings, seccionInicial = 'tarifas', on
                   <option value="STAR">STAR</option>
                 </select>
               </Ajuste>
-              <Ajuste titulo="Ancho del papel" ancho="w-40">
+              <Ajuste titulo="Ancho del papel" ancho="w-52">
                 <select
                   value={form.impresora_ancho ?? 32}
                   onChange={(e) => set('impresora_ancho')(e.target.value)}
@@ -344,8 +413,20 @@ export default function Configuracion({ settings, seccionInicial = 'tarifas', on
                   className="w-4 h-4 rounded ml-auto block"
                 />
               </Ajuste>
+              <Ajuste
+                titulo="Imprimir sin tildes"
+                ayuda="Actívelo sólo si en la página de prueba las tildes y la ñ salen como símbolos raros"
+                ancho="w-14"
+              >
+                <input
+                  type="checkbox"
+                  checked={Boolean(Number(form.impresora_sin_tildes))}
+                  onChange={(e) => set('impresora_sin_tildes')(e.target.checked ? 1 : 0)}
+                  className="w-4 h-4 rounded ml-auto block"
+                />
+              </Ajuste>
 
-              <div className="px-4 py-3.5 bg-lienzo">
+              <div className="px-4 py-3.5 bg-lienzo space-y-2.5">
                 <button
                   type="button"
                   onClick={probarImpresora}
@@ -355,7 +436,40 @@ export default function Configuracion({ settings, seccionInicial = 'tarifas', on
                   <Icono nombre="impresora" tam={16} />
                   {probando ? 'Enviando…' : 'Imprimir página de prueba'}
                 </button>
+                <p className="text-mini text-grafito">
+                  La página trae un código de barras del mismo tamaño que el del tiquete. Al
+                  escanearlo, la aplicación debe avisar “PRUEBA no está adentro”: así se comprueba
+                  la impresora y el lector a la vez.
+                </p>
               </div>
+            </section>
+          )}
+
+          {seccion === 'tiquete' && (
+            <section className="panel overflow-hidden">
+              <div className="px-4 py-3.5">
+                <label className="text-base font-medium" htmlFor="politicas-tiquete">
+                  Políticas
+                </label>
+                <p className="text-mini text-grafito mt-0.5">
+                  Salen al pie del tiquete de entrada. Un párrafo por renglón; lo que va antes de
+                  los dos puntos sale en negrilla. Donde escriba{' '}
+                  <code className="num text-tinta">{'{ticket_perdido}'}</code> se imprime el
+                  recargo configurado en Precios (hoy {cop(form.cargo_ticket_perdido)}).
+                </p>
+                <textarea
+                  id="politicas-tiquete"
+                  rows={10}
+                  value={form.politicas_tiquete ?? ''}
+                  onChange={(e) => set('politicas_tiquete')(e.target.value)}
+                  className="campo font-normal leading-snug resize-y mt-3"
+                />
+              </div>
+              <p className="px-4 py-3 bg-lienzo text-mini text-grafito border-t border-linea">
+                Encima de las políticas, el tiquete lleva el nombre, la dirección, el horario y el
+                teléfono de la sección Negocio, la placa en letra grande, su código de barras y la
+                hora de entrada. Déjelas vacías para imprimir el tiquete sin políticas.
+              </p>
             </section>
           )}
 

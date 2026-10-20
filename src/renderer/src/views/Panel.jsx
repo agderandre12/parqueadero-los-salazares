@@ -1,6 +1,6 @@
 import CeldasGrid from '../components/CeldasGrid.jsx'
 import Icono from '../components/Icono.jsx'
-import { fechaLarga, hora, transcurridoCorto } from '../lib/format.js'
+import { fechaLarga, hora, permanencia } from '../lib/format.js'
 
 /*
  * El panel es la pantalla de operación: celdas, entradas y salidas. El dinero
@@ -103,7 +103,7 @@ export default function Panel({ stats, celdas, sinCelda, ultimos, ahora, onIr, o
                     </span>
                     {activo ? (
                       <span className="text-micro text-grafito num">
-                        {transcurridoCorto(v.hora_entrada, ahora)}
+                        {permanencia(v.tipo_tarifa, v.hora_entrada, ahora)}
                       </span>
                     ) : (
                       <span className="text-micro text-niebla num">{hora(v.hora_salida)}</span>

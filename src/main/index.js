@@ -43,17 +43,34 @@ function crearVentana() {
   }
 }
 
-app.whenReady().then(() => {
-  getDb() // crea/abre la base de datos y aplica el esquema
-  console.log('[db]', dbPath())
-
-  registrarHandlers()
-  crearVentana()
-
-  app.on('activate', () => {
-    if (BrowserWindow.getAllWindows().length === 0) crearVentana()
+/*
+ * Una sola instancia: dos ventanas sobre la misma base mostrarían estados
+ * distintos de las celdas y la caja, y el operario podría cobrar dos veces la
+ * misma moto. Si ya hay una abierta, se trae al frente y esta se cierra sin
+ * llegar a abrir la base de datos.
+ */
+if (!app.requestSingleInstanceLock()) {
+  app.quit()
+} else {
+  app.on('second-instance', () => {
+    if (!ventana) return
+    if (ventana.isMinimized()) ventana.restore()
+    ventana.show()
+    ventana.focus()
   })
-})
+
+  app.whenReady().then(() => {
+    getDb() // crea/abre la base de datos y aplica el esquema
+    console.log('[db]', dbPath())
+
+    registrarHandlers()
+    crearVentana()
+
+    app.on('activate', () => {
+      if (BrowserWindow.getAllWindows().length === 0) crearVentana()
+    })
+  })
+}
 
 app.on('window-all-closed', () => {
   if (process.platform !== 'darwin') app.quit()

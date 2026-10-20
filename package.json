@@ -11,13 +11,15 @@
     "build": "electron-vite build",
     "start": "electron-vite preview",
     "test": "vite build --config pruebas/vite.config.mjs && electron out/pruebas/index.cjs",
-    "dist": "electron-vite build && electron-builder --win --x64"
+    "dist": "electron-vite build && electron-builder --win --x64",
+    "icono": "electron scripts/generar-icono.cjs"
   },
   "build": {
     "appId": "com.lossalazares.parqueadero",
     "productName": "Parqueadero Los Salazares",
     "directories": {
-      "output": "release"
+      "output": "release",
+      "buildResources": "build"
     },
     "files": [
       "out/**/*",
@@ -26,7 +28,8 @@
     "win": {
       "target": [
         "nsis"
-      ]
+      ],
+      "icon": "build/icon.ico"
     },
     "nsis": {
       "oneClick": false,

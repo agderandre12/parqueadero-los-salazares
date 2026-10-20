@@ -27,13 +27,16 @@ export function cotizar({ placa, ticketPerdido = false }) {
  * `metodoPago` es obligatorio ('efectivo' | 'transferencia'): de él depende si
  * el cobro entra o no al saldo físico de la caja registradora.
  *
+ * La mensualidad es la excepción: se pagó al entrar (`services/entrada.js`),
+ * así que su salida sólo libera la celda — sin método de pago, sin venta y sin
+ * recibo. `transaccion` e `impresion` vuelven en null.
+ *
  * El cierre en base de datos es atómico. La impresión ocurre después y nunca
  * revierte el cobro: si la impresora falla, la salida ya quedó registrada y el
  * resultado lo informa en `impresion`.
  */
 export async function liquidar({ vehicleId, placa, ticketPerdido = false, metodoPago }) {
   const settings = getSettings()
-  const metodo = normalizarMetodoPago(metodoPago)
 
   const vehicle = vehicleId
     ? vehiculos.obtenerPorId(vehicleId)
@@ -42,8 +45,15 @@ export async function liquidar({ vehicleId, placa, ticketPerdido = false, metodo
   if (!vehicle) throw new Error('Vehículo no encontrado')
   if (vehicle.estado !== 'activo') throw new Error(`La placa ${vehicle.placa} ya fue liquidada`)
 
-  const cobro = calcularCobro({ vehicle, settings, ticketPerdido })
   const salida = ahoraSql()
+
+  if (vehicle.tipo_tarifa === 'mensualidad') {
+    const cobro = calcularCobro({ vehicle, settings })
+    return { vehicle: vehiculos.finalizar(vehicle.id, salida), transaccion: null, cobro, impresion: null }
+  }
+
+  const metodo = normalizarMetodoPago(metodoPago)
+  const cobro = calcularCobro({ vehicle, settings, ticketPerdido })
 
   const { vehicle: finalizado, transaccion } = enTransaccion(() => {
     const actualizado = vehiculos.finalizar(vehicle.id, salida)

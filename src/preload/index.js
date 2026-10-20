@@ -39,6 +39,7 @@ const api = {
   impresora: {
     estado: () => invocar('printer:estado'),
     prueba: () => invocar('printer:prueba'),
+    lista: () => invocar('printer:lista'),
     tiquete: (vehicleId) => invocar('printer:tiquete', vehicleId),
     reimprimir: (id) => invocar('printer:reimprimir', id)
   }

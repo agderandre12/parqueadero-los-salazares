@@ -217,6 +217,7 @@ export function mapaCeldas() {
       ocupada: Boolean(v),
       placa: v ? v.placa : null,
       horaEntrada: v ? v.hora_entrada : null,
+      tipoTarifa: v ? v.tipo_tarifa : null,
       vehicleId: v ? v.id : null
     })
   }

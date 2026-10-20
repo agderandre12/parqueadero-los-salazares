@@ -9,7 +9,8 @@ export const CARGO_TICKET_PERDIDO_DEFECTO = 2000
  *  - 'hora'          : se cobra por hora iniciada, con tope de amanecida por cada
  *                      bloque de 24h (nunca se cobra más que la amanecida del día).
  *  - 'amanecida'     : tarifa fija por cada bloque de 24h iniciado.
- *  - 'mensualidad'   : $0 al salir (el mes ya está pagado).
+ *  - 'mensualidad'   : $0 al salir: se cobró al entrar (`services/entrada.js`).
+ *                      No aplican gracia ni tiquete perdido.
  *  - 'personalizada' : valor fijo pactado, guardado en tarifa_personalizada.
  *  - Antes de `minutos_gracia` no se cobra nada.
  *  - `ticketPerdido` suma el recargo configurado (por defecto $2.000).
@@ -29,16 +30,24 @@ export function calcularCobro({ vehicle, settings, ahora = new Date(), ticketPer
   let montoBase = 0
   let detalle = ''
 
+  if (tipo === 'mensualidad') {
+    return {
+      minutos,
+      horas,
+      dias,
+      montoBase: 0,
+      recargo: 0,
+      total: 0,
+      tipoTarifa: tipo,
+      detalle: 'Mensualidad'
+    }
+  }
+
   if (minutos <= (Number(settings.minutos_gracia) || 0) && tipo !== 'personalizada') {
     montoBase = 0
     detalle = `Tiempo de gracia (${minutos} min)`
   } else {
     switch (tipo) {
-      case 'mensualidad':
-        montoBase = 0
-        detalle = 'Mensualidad vigente'
-        break
-
       case 'personalizada':
         montoBase = Number(vehicle.tarifa_personalizada) || 0
         detalle = 'Tarifa personalizada'

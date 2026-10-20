@@ -6,7 +6,7 @@ import {
   fecha,
   hora,
   isoLocal,
-  transcurridoCorto,
+  permanencia,
   ETIQUETA_TARIFA
 } from '../lib/format.js'
 
@@ -163,7 +163,7 @@ export default function Vehiculos({ ahora, placaInicial, onSalida, onAviso }) {
                   <span className="text-mini text-grafito num">{hora(v.hora_entrada)}</span>
                   <span className="text-mini num">
                     {activo ? (
-                      transcurridoCorto(v.hora_entrada, ahora)
+                      permanencia(v.tipo_tarifa, v.hora_entrada, ahora)
                     ) : (
                       <span className="text-niebla">{fecha(v.hora_entrada)}</span>
                     )}

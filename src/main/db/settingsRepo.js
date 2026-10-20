@@ -5,6 +5,7 @@ const CAMPOS_EDITABLES = [
   'nit',
   'direccion',
   'telefono',
+  'horario',
   'total_celdas',
   'tarifa_hora',
   'tarifa_amanecida',
@@ -17,7 +18,9 @@ const CAMPOS_EDITABLES = [
   'impresora_interface',
   'impresora_ancho',
   'imprimir_automatico',
-  'mensaje_recibo'
+  'impresora_sin_tildes',
+  'mensaje_recibo',
+  'politicas_tiquete'
 ]
 
 export function getSettings() {

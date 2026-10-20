@@ -83,7 +83,7 @@ export default function Rail({ vista, onIr, escaneando, impresora }) {
         <span
           title={
             impresora?.conectada
-              ? 'Impresora conectada'
+              ? 'Impresora lista'
               : `Impresora: ${impresora?.motivo || 'sin conexión'}`
           }
           className={`w-9 h-9 rounded-campo flex items-center justify-center

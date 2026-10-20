@@ -143,12 +143,29 @@ export default function App() {
               settings={ajustes}
               celdaSugerida={celdas.find((c) => !c.ocupada)?.numero ?? null}
               hayCupo={stats.disponibles > 0}
-              onRegistrado={({ vehicle, impresion }) => {
-                setAviso({
-                  tipo: 'ok',
-                  texto: `${vehicle.placa} entró${vehicle.celda ? ` a la celda ${fmtCelda(vehicle.celda)}` : ''}`,
-                  detalle: impresion?.ok ? 'Tiquete impreso' : null
-                })
+              onRegistrado={({ vehicle, transaccion, impresion }) => {
+                const lugar = vehicle.celda ? ` a la celda ${fmtCelda(vehicle.celda)}` : ''
+                if (!transaccion) {
+                  setAviso({
+                    tipo: 'ok',
+                    texto: `${vehicle.placa} entró${lugar}`,
+                    detalle: impresion?.ok ? 'Tiquete impreso' : null
+                  })
+                } else if (impresion?.ok) {
+                  setAviso({
+                    tipo: 'ok',
+                    texto: `${vehicle.placa} entró${lugar} · mensualidad ${cop(transaccion.monto)}`,
+                    detalle: 'Comprobante de pago impreso'
+                  })
+                } else {
+                  // El comprobante es obligatorio: si no salió, el operario
+                  // tiene que saberlo para reimprimirlo desde Vehículos.
+                  setAviso({
+                    tipo: 'error',
+                    texto: `Mensualidad de ${vehicle.placa} cobrada, pero el comprobante no se imprimió`,
+                    detalle: `${impresion?.motivo || 'Impresora no disponible'}. Reimprímalo desde Vehículos.`
+                  })
+                }
                 refrescar()
               }}
               onError={(texto) => setAviso({ tipo: 'error', texto })}
@@ -163,7 +180,9 @@ export default function App() {
               onLiquidado={({ vehicle, cobro }) => {
                 setAviso({
                   tipo: 'ok',
-                  texto: `${vehicle.placa} salió · ${cop(cobro.total)}`
+                  texto: `${vehicle.placa} salió · ${
+                    cobro.tipoTarifa === 'mensualidad' ? 'mensualidad' : cop(cobro.total)
+                  }`
                 })
                 refrescar()
               }}

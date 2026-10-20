@@ -6,7 +6,7 @@ import {
   fechaHora,
   hora,
   normalizarPlaca,
-  transcurrido,
+  permanencia,
   ETIQUETA_METODO,
   ETIQUETA_TARIFA,
   METODOS_PAGO
@@ -33,7 +33,9 @@ export default function Salida({ placaInicial, ahora, onLiquidado, onAviso }) {
   const buscadorRef = useRef(null)
 
   const cargoTicket = datos?.settings?.cargo_ticket_perdido ?? 2000
-  const puedeCobrar = fase === 'listo' && Boolean(metodoPago)
+  // La mensualidad se pagó al entrar: su salida no cobra ni pide método de pago.
+  const esMensualidad = datos?.vehicle?.tipo_tarifa === 'mensualidad'
+  const puedeCobrar = fase === 'listo' && (esMensualidad || Boolean(metodoPago))
 
   /** Cotiza una placa concreta y la deja lista para cobrar. */
   const cotizar = useCallback(async (placa, conRecargo) => {
@@ -89,17 +91,17 @@ export default function Salida({ placaInicial, ahora, onLiquidado, onAviso }) {
   const cobrar = useCallback(
     async (imprimir) => {
       if (fase !== 'listo' || !datos) return
-      if (!metodoPago) {
+      if (!esMensualidad && !metodoPago) {
         onAviso?.({ tipo: 'error', texto: 'Seleccione el método de pago antes de cobrar' })
         return
       }
       setFase('cobrando')
 
-      const res = await window.api.vehiculos.liquidar({
-        vehicleId: datos.vehicle.id,
-        ticketPerdido,
-        metodoPago
-      })
+      const res = await window.api.vehiculos.liquidar(
+        esMensualidad
+          ? { vehicleId: datos.vehicle.id }
+          : { vehicleId: datos.vehicle.id, ticketPerdido, metodoPago }
+      )
 
       if (!res.ok) {
         setError(res.error)
@@ -114,7 +116,7 @@ export default function Salida({ placaInicial, ahora, onLiquidado, onAviso }) {
       // La liquidación ya intentó imprimir si la impresión automática está
       // activa. Este botón fuerza la copia cuando el operario la pidió y la
       // automática está apagada o falló.
-      if (imprimir && !res.data.impresion?.ok) {
+      if (imprimir && res.data.transaccion && !res.data.impresion?.ok) {
         const rei = await window.api.impresora.reimprimir(res.data.transaccion.id)
         if (!rei.ok || !rei.data?.ok) {
           onAviso?.({
@@ -125,7 +127,7 @@ export default function Salida({ placaInicial, ahora, onLiquidado, onAviso }) {
         }
       }
     },
-    [fase, datos, ticketPerdido, metodoPago, onLiquidado, onAviso]
+    [fase, datos, esMensualidad, ticketPerdido, metodoPago, onLiquidado, onAviso]
   )
 
   function limpiar() {
@@ -218,7 +220,8 @@ export default function Salida({ placaInicial, ahora, onLiquidado, onAviso }) {
                     >
                       <span className="placa flex-1">{v.placa}</span>
                       <span className="text-micro text-grafito num">
-                        celda {fmtCelda(v.celda)} · {transcurrido(v.hora_entrada, ahora)}
+                        celda {fmtCelda(v.celda)} ·{' '}
+                        {permanencia(v.tipo_tarifa, v.hora_entrada, ahora, { corto: false })}
                       </span>
                     </button>
                   </li>
@@ -291,7 +294,7 @@ export default function Salida({ placaInicial, ahora, onLiquidado, onAviso }) {
                 Ingresó el {fechaHora(vehiculo.hora_entrada)}
               </p>
 
-              {fase !== 'hecho' && (
+              {fase !== 'hecho' && !esMensualidad && (
                 <label
                   className="mt-5 flex items-center gap-3 rounded-campo border border-linea
                              px-3 py-3 cursor-pointer transition-colors duration-rapido
@@ -326,10 +329,16 @@ export default function Salida({ placaInicial, ahora, onLiquidado, onAviso }) {
                 <span className="num font-medium text-tinta">{cop(cobro.montoBase)}</span>
               </div>
 
-              <div className="mt-2.5 flex justify-between border-b border-linea pb-3 text-base text-grafito">
-                <span>Recargo tiquete perdido</span>
-                <span className="num">{cobro.recargo > 0 ? cop(cobro.recargo) : '—'}</span>
-              </div>
+              {esMensualidad ? (
+                <p className="mt-2.5 border-b border-linea pb-3 text-mini text-grafito">
+                  Se pagó al registrar la entrada. La salida no cobra nada.
+                </p>
+              ) : (
+                <div className="mt-2.5 flex justify-between border-b border-linea pb-3 text-base text-grafito">
+                  <span>Recargo tiquete perdido</span>
+                  <span className="num">{cobro.recargo > 0 ? cop(cobro.recargo) : '—'}</span>
+                </div>
+              )}
 
               <div className="pt-3.5">
                 <div className="text-micro font-medium text-grafito">
@@ -340,7 +349,22 @@ export default function Salida({ placaInicial, ahora, onLiquidado, onAviso }) {
                 </div>
               </div>
 
-              {fase === 'hecho' ? (
+              {fase === 'hecho' && !recibo.transaccion ? (
+                <>
+                  <div className="mt-4 rounded-campo border border-linea bg-lienzo px-3 py-3">
+                    <p className="text-base font-medium flex items-center gap-2">
+                      <Icono nombre="visto" tam={16} className="text-azul-700" />
+                      Salida registrada
+                    </p>
+                    <p className="mt-1 text-micro text-grafito">
+                      Mensualidad: sin cobro ni recibo, la celda quedó libre.
+                    </p>
+                  </div>
+                  <button type="button" onClick={limpiar} className="btn-azul w-full py-3 mt-3">
+                    Siguiente cliente
+                  </button>
+                </>
+              ) : fase === 'hecho' ? (
                 <>
                   <div className="mt-4 flex items-center justify-between rounded-campo border border-linea px-3 py-2.5">
                     <span className="flex items-center gap-2 text-base font-medium">
@@ -389,6 +413,16 @@ export default function Salida({ placaInicial, ahora, onLiquidado, onAviso }) {
                     Siguiente cliente
                   </button>
                 </>
+              ) : esMensualidad ? (
+                <button
+                  type="button"
+                  onClick={() => cobrar(false)}
+                  disabled={!puedeCobrar}
+                  className="btn-azul w-full py-3.5 mt-5"
+                >
+                  <Icono nombre="salida" tam={17} />
+                  {fase === 'cobrando' ? 'Registrando…' : 'Registrar salida'}
+                </button>
               ) : (
                 <>
                   <fieldset className="mt-5" disabled={fase === 'cobrando'}>

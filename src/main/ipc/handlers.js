@@ -3,6 +3,7 @@ import { getSettings, updateSettings } from '../db/settingsRepo.js'
 import * as vehiculos from '../db/vehiclesRepo.js'
 import * as transacciones from '../db/transactionsRepo.js'
 import { cotizar, liquidar } from '../services/liquidacion.js'
+import { registrarEntrada } from '../services/entrada.js'
 import {
   resumenCaja,
   abrirCaja,
@@ -15,7 +16,8 @@ import {
   imprimirRecibo,
   imprimirTiquete,
   imprimirPrueba,
-  estadoImpresora
+  estadoImpresora,
+  listarImpresoras
 } from '../services/printer.js'
 
 /** Envuelve un handler para que el renderer reciba siempre {ok, data|error}. */
@@ -44,19 +46,9 @@ export function registrarHandlers() {
   }))
 
   // ---------------- Vehículos --------------------
-  // Al registrar la entrada se imprime el tiquete con el código de barras que
-  // el escáner leerá en la salida. Si la impresora falla, la entrada queda
-  // registrada igual y el resultado lo informa en `impresion`.
-  manejar('vehicles:crear', async (datos) => {
-    const vehicle = vehiculos.crearEntrada(datos)
-    const settings = getSettings()
-
-    let impresion = { ok: false, motivo: 'Impresión automática desactivada' }
-    if (settings.imprimir_automatico) {
-      impresion = await imprimirTiquete({ settings, vehicle })
-    }
-    return { vehicle, impresion }
-  })
+  // Tiquete con código de barras, o cobro y comprobante si es mensualidad. Si
+  // la impresora falla, lo guardado queda igual y `impresion` lo informa.
+  manejar('vehicles:crear', (datos) => registrarEntrada(datos))
 
   manejar('vehicles:activos', () => vehiculos.listarActivos())
   manejar('vehicles:ultimos', (limite = 7) => vehiculos.ultimosIngresos(limite))
@@ -104,6 +96,8 @@ export function registrarHandlers() {
   // ---------------- Impresora --------------------
   manejar('printer:estado', () => estadoImpresora(getSettings()))
   manejar('printer:prueba', () => imprimirPrueba(getSettings()))
+  // Impresoras instaladas en Windows, para escoger la térmica sin digitar su nombre.
+  manejar('printer:lista', () => listarImpresoras())
 
   manejar('printer:tiquete', (vehicleId) => {
     const vehicle = vehiculos.obtenerPorId(vehicleId)

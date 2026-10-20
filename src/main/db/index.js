@@ -4,6 +4,7 @@ import { mkdirSync } from 'fs'
 import { DatabaseSync } from 'node:sqlite'
 // Vite inlina el contenido del .sql en el bundle del proceso principal.
 import schemaSql from './schema.sql?raw'
+import { POLITICAS_PREDETERMINADAS } from './predeterminados.js'
 
 /*
  * Se usa `node:sqlite` (SQLite incluido en Node 24 / Electron 43) en lugar de
@@ -58,6 +59,26 @@ function migrar(conexion) {
       'ALTER TABLE settings ADD COLUMN caja_base_predeterminada INTEGER NOT NULL DEFAULT 0'
     )
   }
+
+  if (!columnas('settings').has('horario')) {
+    conexion.exec(`ALTER TABLE settings ADD COLUMN horario TEXT NOT NULL DEFAULT ''`)
+  }
+
+  if (!columnas('settings').has('impresora_sin_tildes')) {
+    conexion.exec(
+      'ALTER TABLE settings ADD COLUMN impresora_sin_tildes INTEGER NOT NULL DEFAULT 0'
+    )
+  }
+
+  if (!columnas('settings').has('politicas_tiquete')) {
+    conexion.exec('ALTER TABLE settings ADD COLUMN politicas_tiquete TEXT')
+  }
+
+  // Sólo la primera vez: si el administrador borra las políticas queda '' (no
+  // NULL) y el tiquete sale sin ellas, que es lo que pidió.
+  conexion
+    .prepare('UPDATE settings SET politicas_tiquete = ? WHERE id = 1 AND politicas_tiquete IS NULL')
+    .run(POLITICAS_PREDETERMINADAS)
 }
 
 /**

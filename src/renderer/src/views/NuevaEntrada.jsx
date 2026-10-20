@@ -1,19 +1,31 @@
 import { useEffect, useRef, useState } from 'react'
 import Icono from '../components/Icono.jsx'
-import { celda as fmtCelda, cop, normalizarPlaca, ETIQUETA_TARIFA } from '../lib/format.js'
+import {
+  celda as fmtCelda,
+  cop,
+  normalizarPlaca,
+  ETIQUETA_TARIFA,
+  METODOS_PAGO
+} from '../lib/format.js'
 
+// `metodoPago` sin valor por defecto, como en la salida: decide si el dinero
+// entra a la caja, así que el operario lo escoge siempre.
 const INICIAL = {
   placa: '',
   marca: '',
   color: '',
   casco: false,
   tipo_tarifa: 'hora',
-  tarifa_personalizada: ''
+  tarifa_personalizada: '',
+  metodoPago: null
 }
 
 /**
  * Registro de entrada. La placa domina la pantalla porque es el único dato
  * obligatorio: todo lo demás se puede dejar en blanco y el ingreso sirve igual.
+ *
+ * La mensualidad es la excepción: se cobra aquí mismo, así que pide el método
+ * de pago y en vez del tiquete imprime el comprobante de pago.
  */
 export default function NuevaEntrada({ settings, celdaSugerida, hayCupo, onRegistrado, onError }) {
   const [form, setForm] = useState(INICIAL)
@@ -29,10 +41,12 @@ export default function NuevaEntrada({ settings, celdaSugerida, hayCupo, onRegis
     setForm((f) => ({ ...f, [campo]: campo === 'placa' ? normalizarPlaca(valor) : valor }))
   }
 
+  const esMensualidad = form.tipo_tarifa === 'mensualidad'
+
   const tarifaMostrada = {
     hora: `${cop(settings?.tarifa_hora)} por hora`,
     amanecida: `${cop(settings?.tarifa_amanecida)} por amanecida`,
-    mensualidad: `${cop(settings?.tarifa_mensualidad)} al mes, ya pagos`,
+    mensualidad: `${cop(settings?.tarifa_mensualidad)} se cobran ahora, al registrar la entrada`,
     personalizada: form.tarifa_personalizada
       ? `${cop(form.tarifa_personalizada)} pactados`
       : 'Escriba el valor pactado'
@@ -48,6 +62,10 @@ export default function NuevaEntrada({ settings, celdaSugerida, hayCupo, onRegis
     }
     if (form.tipo_tarifa === 'personalizada' && !Number(form.tarifa_personalizada)) {
       onError?.('Escriba el valor pactado para la tarifa personalizada')
+      return
+    }
+    if (esMensualidad && !form.metodoPago) {
+      onError?.('Escoja cómo paga el cliente la mensualidad')
       return
     }
 
@@ -144,6 +162,36 @@ export default function NuevaEntrada({ settings, celdaSugerida, hayCupo, onRegis
             <p className="mt-2 text-mini text-grafito num">{tarifaMostrada}</p>
           </fieldset>
 
+          {esMensualidad && (
+            <fieldset className="mt-4" disabled={guardando}>
+              <legend className="etiqueta">Método de pago</legend>
+              <div className="grid grid-cols-2 gap-1.5">
+                {METODOS_PAGO.map((m) => {
+                  const activo = form.metodoPago === m.id
+                  return (
+                    <button
+                      key={m.id}
+                      type="button"
+                      aria-pressed={activo}
+                      onClick={() => setForm((f) => ({ ...f, metodoPago: m.id }))}
+                      className={`flex flex-col items-center gap-1 rounded-campo border px-2 py-3
+                        transition-colors duration-rapido ease-salida
+                        ${
+                          activo
+                            ? 'border-azul bg-azul-50 text-azul-700'
+                            : 'border-linea-fuerte text-grafito hover:border-niebla hover:bg-lienzo'
+                        }`}
+                    >
+                      <Icono nombre={m.icono} tam={19} />
+                      <span className="text-base font-medium">{m.etiqueta}</span>
+                      <span className="text-micro text-niebla">{m.ayuda}</span>
+                    </button>
+                  )
+                })}
+              </div>
+            </fieldset>
+          )}
+
           {form.tipo_tarifa === 'personalizada' && (
             <div className="mt-4">
               <label className="etiqueta" htmlFor="valor">
@@ -208,14 +256,35 @@ export default function NuevaEntrada({ settings, celdaSugerida, hayCupo, onRegis
             />
           </label>
 
-          <button type="submit" disabled={guardando} className="btn-azul w-full py-3.5 mt-6">
-            <Icono nombre="visto" tam={17} />
-            {guardando ? 'Registrando…' : 'Registrar entrada'}
-          </button>
-
-          <p className="mt-2.5 text-center text-micro text-niebla">
-            Enter para guardar · el tiquete con código de barras se imprime solo
-          </p>
+          {esMensualidad ? (
+            <>
+              <button
+                type="submit"
+                disabled={guardando || !form.metodoPago}
+                className="btn-azul w-full py-3.5 mt-6"
+              >
+                <Icono nombre="impresora" tam={17} />
+                {guardando
+                  ? 'Cobrando…'
+                  : `Cobrar ${cop(settings?.tarifa_mensualidad)} e imprimir`}
+              </button>
+              <p className="mt-2.5 text-center text-micro text-niebla">
+                {form.metodoPago
+                  ? 'Enter para cobrar · se registra la venta y se imprime el comprobante de pago'
+                  : 'Escoja cómo paga el cliente para habilitar el cobro'}
+              </p>
+            </>
+          ) : (
+            <>
+              <button type="submit" disabled={guardando} className="btn-azul w-full py-3.5 mt-6">
+                <Icono nombre="visto" tam={17} />
+                {guardando ? 'Registrando…' : 'Registrar entrada'}
+              </button>
+              <p className="mt-2.5 text-center text-micro text-niebla">
+                Enter para guardar · el tiquete con código de barras se imprime solo
+              </p>
+            </>
+          )}
         </div>
       </form>
     </div>

@@ -15,8 +15,9 @@ CREATE TABLE IF NOT EXISTS settings (
   id                   INTEGER PRIMARY KEY CHECK (id = 1),
   nombre_parqueadero   TEXT    NOT NULL DEFAULT 'Parqueadero Los Salazares',
   nit                  TEXT    NOT NULL DEFAULT '',
-  direccion            TEXT    NOT NULL DEFAULT '',
-  telefono             TEXT    NOT NULL DEFAULT '',
+  direccion            TEXT    NOT NULL DEFAULT 'Cisneros - Antioquia, frente de la Jesús María Duque',
+  telefono             TEXT    NOT NULL DEFAULT '3226746848',
+  horario              TEXT    NOT NULL DEFAULT '7:00 a. m. - 9:00 p. m.',
 
   -- Capacidad
   total_celdas         INTEGER NOT NULL DEFAULT 50,
@@ -39,7 +40,11 @@ CREATE TABLE IF NOT EXISTS settings (
   impresora_interface  TEXT    NOT NULL DEFAULT '',       -- ej: printer:POS-58  /  tcp://192.168.1.50
   impresora_ancho      INTEGER NOT NULL DEFAULT 32,       -- caracteres por línea (58mm=32, 80mm=48)
   imprimir_automatico  INTEGER NOT NULL DEFAULT 1,
+  impresora_sin_tildes INTEGER NOT NULL DEFAULT 0,       -- 1 si la térmica no trae la página PC858
   mensaje_recibo       TEXT    NOT NULL DEFAULT 'Gracias por preferirnos',
+  -- Políticas al pie del tiquete de entrada, un párrafo por línea. NULL = nunca
+  -- configuradas: `db/index.js` siembra el texto predeterminado al abrir la base.
+  politicas_tiquete    TEXT,
 
   updated_at           TEXT    NOT NULL DEFAULT (datetime('now','localtime'))
 );
