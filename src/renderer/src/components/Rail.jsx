@@ -12,7 +12,8 @@ export const VISTAS = [
   { id: 'entrada', etiqueta: 'Nueva entrada', icono: 'entrada', tecla: 'F2' },
   { id: 'salida', etiqueta: 'Registrar salida', icono: 'salida', tecla: 'F3' },
   { id: 'vehiculos', etiqueta: 'Vehículos', icono: 'vehiculos', tecla: 'F4' },
-  { id: 'metricas', etiqueta: 'Métricas y caja', icono: 'grafica', tecla: 'F5' }
+  { id: 'metricas', etiqueta: 'Métricas y caja', icono: 'grafica', tecla: 'F5' },
+  { id: 'lavadero', etiqueta: 'Lavadero', icono: 'lavadero', tecla: 'F6' }
 ]
 
 function Boton({ vista, activa, onIr }) {
@@ -60,14 +61,6 @@ export default function Rail({ vista, onIr, escaneando, impresora }) {
       {VISTAS.map((v) => (
         <Boton key={v.id} vista={v} activa={vista === v.id} onIr={onIr} />
       ))}
-
-      {/* Lavadero: la navegación ya le guarda el puesto. */}
-      <span
-        title="Lavadero — próximamente"
-        className="w-11 h-11 rounded-campo flex items-center justify-center text-humo/45"
-      >
-        <Icono nombre="lavadero" tam={20} />
-      </span>
 
       <div className="flex-1" />
 

@@ -1,7 +1,11 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
+import CampoPesos, { CampoEntero } from '../components/CampoPesos.jsx'
 import Icono from '../components/Icono.jsx'
 import PanelCaja from '../components/PanelCaja.jsx'
 import PanelVentas from '../components/PanelVentas.jsx'
+import SimulacionCobro from '../components/SimulacionCobro.jsx'
+import TiposLavada from '../components/TiposLavada.jsx'
+import TramosHora from '../components/TramosHora.jsx'
 import { cop } from '../lib/format.js'
 
 /*
@@ -9,13 +13,15 @@ import { cop } from '../lib/format.js'
  * operario no necesita durante el turno — cuánto se ha vendido, cómo está la
  * caja y cuánto se cobra — y por eso el dinero salió del panel de operación.
  *
- * Las dos primeras secciones no se guardan con la barra inferior: leen y
- * escriben por su cuenta (`window.api.metricas` y `window.api.caja`).
+ * Ventas, Caja del día y Tipos de lavada no se guardan con la barra inferior:
+ * leen y escriben por su cuenta (`window.api.metricas`, `window.api.caja` y
+ * `window.api.lavadero`).
  */
 const SECCIONES = [
   { id: 'ventas', etiqueta: 'Ventas', grupo: 'Métricas' },
   { id: 'caja', etiqueta: 'Caja del día', grupo: 'Métricas' },
   { id: 'tarifas', etiqueta: 'Precios', grupo: 'Configuración' },
+  { id: 'lavadas', etiqueta: 'Tipos de lavada', grupo: 'Configuración' },
   { id: 'reglas', etiqueta: 'Reglas de cobro', grupo: 'Configuración' },
   { id: 'negocio', etiqueta: 'Negocio', grupo: 'Configuración' },
   { id: 'capacidad', etiqueta: 'Capacidad', grupo: 'Configuración' },
@@ -30,6 +36,30 @@ const ANCHOS = { ventas: 'max-w-4xl', caja: 'max-w-3xl' }
 // Opción del selector de impresora que abre el campo para escribir a mano.
 const OTRA_IMPRESORA = '__otra__'
 
+// Lo único que guarda "Imprimir página de prueba": lo demás espera al botón.
+const CAMPOS_IMPRESORA = [
+  'impresora_interface',
+  'impresora_tipo',
+  'impresora_ancho',
+  'imprimir_automatico',
+  'impresora_sin_tildes'
+]
+
+/**
+ * La configuración vuelve a llegar cada vez que se guarda algo (y antes, con
+ * cada refresco del panel): se toma la nueva sin perder lo que el
+ * administrador está escribiendo y todavía no guardó. Antes el formulario se
+ * reiniciaba cada 5 s y el precio recién escrito volvía al guardado.
+ */
+function conservarEdiciones(form, anterior, nueva) {
+  if (!anterior) return { ...nueva }
+  const resultado = { ...nueva }
+  for (const campo of Object.keys(form)) {
+    if (String(form[campo]) !== String(anterior[campo])) resultado[campo] = form[campo]
+  }
+  return resultado
+}
+
 /** Fila de ajuste: nombre y explicación a la izquierda, control a la derecha. */
 function Ajuste({ titulo, ayuda, children, ancho = 'w-40' }) {
   return (
@@ -43,22 +73,6 @@ function Ajuste({ titulo, ayuda, children, ancho = 'w-40' }) {
   )
 }
 
-function Pesos({ valor, onChange }) {
-  return (
-    <div className="relative">
-      <span className="absolute left-3 top-1/2 -translate-y-1/2 text-niebla text-base">$</span>
-      <input
-        type="number"
-        min="0"
-        step="100"
-        value={valor ?? ''}
-        onChange={(e) => onChange(e.target.value)}
-        className="campo num pl-7 text-right"
-      />
-    </div>
-  )
-}
-
 export default function Configuracion({ settings, seccionInicial = 'tarifas', onGuardado, onAviso }) {
   const [seccion, setSeccion] = useState(seccionInicial)
   const [form, setForm] = useState(settings || {})
@@ -66,9 +80,15 @@ export default function Configuracion({ settings, seccionInicial = 'tarifas', on
   const [probando, setProbando] = useState(false)
   const [instaladas, setInstaladas] = useState(null)
   const [conexionManual, setConexionManual] = useState(false)
+  // La configuración sobre la que se empezó a editar: con ella se sabe qué
+  // campos tocó el administrador cuando llega una nueva.
+  const base = useRef(settings)
 
   useEffect(() => {
-    if (settings) setForm(settings)
+    if (!settings) return
+    const anterior = base.current
+    base.current = settings
+    setForm((f) => conservarEdiciones(f, anterior, settings))
   }, [settings])
 
   // La lista se pide al entrar a la sección: así aparece una impresora que se
@@ -101,6 +121,10 @@ export default function Configuracion({ settings, seccionInicial = 'tarifas', on
     setGuardando(false)
 
     if (res.ok) {
+      // Lo guardado ya viene normalizado (las reglas ordenadas, los montos en
+      // número): el formulario pasa a ser exactamente eso.
+      base.current = res.data
+      setForm(res.data)
       onGuardado?.(res.data)
       onAviso?.({ tipo: 'ok', texto: 'Configuración guardada' })
     } else {
@@ -110,8 +134,11 @@ export default function Configuracion({ settings, seccionInicial = 'tarifas', on
 
   async function probarImpresora() {
     setProbando(true)
-    // Se guarda primero: la prueba usa la configuración de la base de datos.
-    const guardado = await window.api.settings.update(form)
+    // Se guarda primero la impresora: la prueba usa la configuración de la
+    // base de datos. Un precio a medio escribir en otra sección no se toca.
+    const guardado = await window.api.settings.update(
+      Object.fromEntries(CAMPOS_IMPRESORA.map((c) => [c, form[c]]))
+    )
     if (guardado.ok) onGuardado?.(guardado.data)
     const res = await window.api.impresora.prueba()
     setProbando(false)
@@ -172,86 +199,92 @@ export default function Configuracion({ settings, seccionInicial = 'tarifas', on
           {seccion === 'caja' && <PanelCaja onAviso={onAviso} />}
 
           {seccion === 'tarifas' && (
-            <section className="panel overflow-hidden">
-              <p className="px-4 py-3 bg-lienzo text-mini text-grafito border-b border-linea">
-                Los precios se aplican al guardar y rigen desde el siguiente cobro. Las salidas ya
-                liquidadas conservan el valor con el que se cobraron.
-              </p>
+            <>
+              <section className="panel overflow-hidden">
+                <p className="px-4 py-3 bg-lienzo text-mini text-grafito border-b border-linea">
+                  Los precios se aplican al guardar y rigen desde el siguiente cobro. Las salidas ya
+                  liquidadas conservan el valor con el que se cobraron.
+                </p>
 
-              <Ajuste titulo="Hora iniciada" ayuda="Se cobra la hora completa apenas empieza">
-                <Pesos valor={form.tarifa_hora} onChange={set('tarifa_hora')} />
-              </Ajuste>
-              <Ajuste
-                titulo="Amanecida"
-                ayuda="También es el tope: por hora nunca se cobra más que esto en 24 h"
-              >
-                <Pesos valor={form.tarifa_amanecida} onChange={set('tarifa_amanecida')} />
-              </Ajuste>
-              <Ajuste
-                titulo="Mensualidad"
-                ayuda="Se cobra al registrar la entrada, con su comprobante; a la salida no se cobra nada"
-              >
-                <Pesos valor={form.tarifa_mensualidad} onChange={set('tarifa_mensualidad')} />
-              </Ajuste>
-              <Ajuste titulo="Tiquete perdido" ayuda="Recargo que se suma al total de la salida">
-                <Pesos valor={form.cargo_ticket_perdido} onChange={set('cargo_ticket_perdido')} />
-              </Ajuste>
-              <Ajuste
-                titulo="Base de caja predeterminada"
-                ayuda="Con cuánto efectivo se abre cada jornada nueva, si nadie la fija a mano"
-              >
-                <Pesos
-                  valor={form.caja_base_predeterminada}
-                  onChange={set('caja_base_predeterminada')}
-                />
-              </Ajuste>
-            </section>
+                <Ajuste titulo="Hora iniciada" ayuda="Se cobra la hora completa apenas empieza">
+                  <CampoPesos valor={form.tarifa_hora} onChange={set('tarifa_hora')} />
+                </Ajuste>
+                <Ajuste
+                  titulo="Amanecida"
+                  ayuda="También es el tope: por hora nunca se cobra más que esto en 24 h"
+                >
+                  <CampoPesos valor={form.tarifa_amanecida} onChange={set('tarifa_amanecida')} />
+                </Ajuste>
+                <Ajuste
+                  titulo="Mensualidad"
+                  ayuda="Se cobra al registrar la entrada, con su comprobante; a la salida no se cobra nada"
+                >
+                  <CampoPesos valor={form.tarifa_mensualidad} onChange={set('tarifa_mensualidad')} />
+                </Ajuste>
+                <Ajuste titulo="Tiquete perdido" ayuda="Recargo que se suma al total de la salida">
+                  <CampoPesos
+                    valor={form.cargo_ticket_perdido}
+                    onChange={set('cargo_ticket_perdido')}
+                  />
+                </Ajuste>
+                <Ajuste
+                  titulo="Base de caja predeterminada"
+                  ayuda="Con cuánto abre una jornada si la anterior no se cerró; si se cerró, abre con lo que quedó en el cajón"
+                >
+                  <CampoPesos
+                    valor={form.caja_base_predeterminada}
+                    onChange={set('caja_base_predeterminada')}
+                  />
+                </Ajuste>
+              </section>
+
+              <TramosHora valor={form.tramos_hora} onChange={set('tramos_hora')} />
+              <SimulacionCobro form={form} />
+            </>
           )}
 
-          {seccion === 'reglas' && (
-            <section className="panel overflow-hidden">
-              <Ajuste
-                titulo="Minutos de gracia"
-                ayuda="Si la moto sale antes de este tiempo, no se le cobra"
-                ancho="w-28"
-              >
-                <input
-                  type="number"
-                  min="0"
-                  max="120"
-                  value={form.minutos_gracia ?? ''}
-                  onChange={(e) => set('minutos_gracia')(e.target.value)}
-                  className="campo num text-right"
-                />
-              </Ajuste>
-              <Ajuste
-                titulo="Horas por bloque"
-                ayuda="Cada cuántas horas se reinicia el tope de amanecida"
-                ancho="w-28"
-              >
-                <input
-                  type="number"
-                  min="1"
-                  max="48"
-                  value={form.horas_tope_dia ?? ''}
-                  onChange={(e) => set('horas_tope_dia')(e.target.value)}
-                  className="campo num text-right"
-                />
-              </Ajuste>
+          {seccion === 'lavadas' && <TiposLavada onAviso={onAviso} />}
 
-              <div className="px-4 py-3.5 bg-lienzo text-mini text-grafito">
-                Con estos valores, una moto que se queda 10 horas paga{' '}
-                <b className="text-tinta num font-medium">
-                  {cop(
-                    Math.min(
-                      10 * Number(form.tarifa_hora || 0),
-                      Number(form.tarifa_amanecida || 0)
-                    )
-                  )}
-                </b>
-                .
-              </div>
-            </section>
+          {seccion === 'reglas' && (
+            <>
+              <section className="panel overflow-hidden">
+                <Ajuste
+                  titulo="Minutos de gracia"
+                  ayuda="Si la moto sale antes de este tiempo, no se le cobra"
+                  ancho="w-28"
+                >
+                  <CampoEntero valor={form.minutos_gracia} onChange={set('minutos_gracia')} />
+                </Ajuste>
+                <Ajuste
+                  titulo="Horas por bloque"
+                  ayuda="Cada cuántas horas se reinicia el tope de amanecida"
+                  ancho="w-28"
+                >
+                  <CampoEntero
+                    valor={form.horas_tope_dia}
+                    onChange={set('horas_tope_dia')}
+                    cifras={2}
+                  />
+                </Ajuste>
+
+                <div className="flex items-center justify-between gap-4 px-4 py-3 bg-lienzo text-mini text-grafito">
+                  <span>
+                    Los valores fijos por tramo de horas (por ejemplo, de 5 a 12 h) se arman en
+                    Precios, en Reglas por tiempo.
+                  </span>
+                  <button
+                    type="button"
+                    onClick={() => setSeccion('tarifas')}
+                    className="btn-fantasma py-1.5 shrink-0"
+                  >
+                    Ir a Precios
+                    <Icono nombre="derecha" tam={14} />
+                  </button>
+                </div>
+              </section>
+
+              <SimulacionCobro form={form} />
+            </>
           )}
 
           {seccion === 'negocio' && (
@@ -321,14 +354,7 @@ export default function Configuracion({ settings, seccionInicial = 'tarifas', on
                 ayuda="Cuántas motos caben. La cuadrícula del panel se ajusta sola."
                 ancho="w-28"
               >
-                <input
-                  type="number"
-                  min="1"
-                  max="500"
-                  value={form.total_celdas ?? ''}
-                  onChange={(e) => set('total_celdas')(e.target.value)}
-                  className="campo num text-right"
-                />
+                <CampoEntero valor={form.total_celdas} onChange={set('total_celdas')} />
               </Ajuste>
 
               {Number(form.total_celdas) < Number(settings.total_celdas) && (
@@ -403,7 +429,7 @@ export default function Configuracion({ settings, seccionInicial = 'tarifas', on
               </Ajuste>
               <Ajuste
                 titulo="Imprimir automáticamente"
-                ayuda="Tiquete al entrar y recibo al salir, sin preguntar"
+                ayuda="El tiquete al registrar la entrada al parqueadero. Al cobrar decide el botón: «Cobrar e imprimir» o «Cobrar sin imprimir»"
                 ancho="w-14"
               >
                 <input

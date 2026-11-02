@@ -11,6 +11,13 @@ export function obtenerDia(fecha) {
   return getDb().prepare('SELECT * FROM caja_dias WHERE fecha = ?').get(fecha)
 }
 
+/** La jornada más reciente antes de `fecha` (no necesariamente la del día anterior). */
+export function jornadaAnterior(fecha) {
+  return getDb()
+    .prepare('SELECT * FROM caja_dias WHERE fecha < ? ORDER BY fecha DESC LIMIT 1')
+    .get(fecha)
+}
+
 /**
  * Garantiza que exista la fila de la jornada. No pisa la base de un día ya
  * abierto: se llama en cada consulta y en cada cobro en efectivo.
@@ -34,15 +41,25 @@ export function fijarBase(fecha, baseInicial) {
   return obtenerDia(fecha)
 }
 
-/** Guarda el conteo físico del cierre y la diferencia contra lo esperado. */
-export function cerrarDia({ fecha, conteoFinal, diferencia, observaciones = '' }) {
+/**
+ * Guarda el conteo físico del cierre, la diferencia contra lo esperado y lo
+ * que se deja en el cajón para la jornada siguiente.
+ */
+export function cerrarDia({ fecha, conteoFinal, diferencia, quedaEnCaja, observaciones = '' }) {
   getDb()
     .prepare(
       `UPDATE caja_dias
-          SET cerrada_at = ?, conteo_final = ?, diferencia = ?, observaciones = ?
+          SET cerrada_at = ?, conteo_final = ?, diferencia = ?, queda_en_caja = ?, observaciones = ?
         WHERE fecha = ?`
     )
-    .run(ahoraSql(), Math.round(conteoFinal), Math.round(diferencia), observaciones, fecha)
+    .run(
+      ahoraSql(),
+      Math.round(conteoFinal),
+      Math.round(diferencia),
+      Math.round(quedaEnCaja),
+      observaciones,
+      fecha
+    )
 
   return obtenerDia(fecha)
 }
@@ -52,7 +69,7 @@ export function reabrirDia(fecha) {
   getDb()
     .prepare(
       `UPDATE caja_dias
-          SET cerrada_at = NULL, conteo_final = NULL, diferencia = NULL
+          SET cerrada_at = NULL, conteo_final = NULL, diferencia = NULL, queda_en_caja = NULL
         WHERE fecha = ?`
     )
     .run(fecha)

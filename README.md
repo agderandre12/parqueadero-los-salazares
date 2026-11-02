@@ -1,7 +1,7 @@
 # Parqueadero Los Salazares
 
-Aplicación de escritorio (local, sin internet) para la gestión de un parqueadero de motos.
-Electron + Vite + React + Tailwind CSS + SQLite.
+Aplicación de escritorio (local, sin internet) para la gestión de un parqueadero de motos
+y su lavadero. Electron + Vite + React + Tailwind CSS + SQLite.
 
 ## Requisitos
 
@@ -64,7 +64,8 @@ y copie el `.db`; si no se puede cerrar, copie juntos `parqueadero.db`,
 5. Abrir la aplicación y revisar en *Configuración* (`F8`):
    - *Negocio*: una base nueva ya trae dirección, teléfono y horario del parqueadero;
      falta el NIT.
-   - *Precios* y *Capacidad*.
+   - *Precios* (con sus *Reglas por tiempo*) y *Capacidad*.
+   - *Tipos de lavada*: crear las lavadas que ofrece el lavadero, con su precio.
    - *Impresora*: escoger la térmica de la lista e **imprimir la página de prueba**.
      Revisar que las tildes y las dos reglas salgan bien y escanear su código: la
      aplicación debe avisar *"PRUEBA no está adentro"*.
@@ -86,19 +87,23 @@ src/
 ├─ main/                         # Proceso principal (Node)
 │  ├─ index.js                   # Arranque de la app y la ventana
 │  ├─ db/
-│  │  ├─ schema.sql              # Esquema: settings, vehicles, transactions, caja_dias
+│  │  ├─ schema.sql              # Esquema: settings, vehicles, transactions, caja_dias,
+│  │  │                          # tipos_lavada, lavados y la vista ventas
 │  │  ├─ index.js                # Conexión, PRAGMAs, migraciones y transacciones
 │  │  ├─ settingsRepo.js         # Configuración del negocio
 │  │  ├─ vehiclesRepo.js         # Entradas, celdas, búsquedas, estadísticas
 │  │  ├─ transactionsRepo.js     # Historial de pagos y totales por método de pago
 │  │  ├─ cajaRepo.js             # Jornadas de caja: base inicial y cierre
+│  │  ├─ lavaderoRepo.js         # Tipos de lavada y motos del lavadero
 │  │  └─ predeterminados.js      # Textos de una base nueva (políticas del tiquete)
 │  ├─ services/
-│  │  ├─ pricing.js              # Cálculo de tarifas (COP)
+│  │  ├─ pricing.js              # Cálculo de tarifas (COP), reglas por tiempo, valor acordado
+│  │  ├─ configuracion.js        # Validación de la configuración antes de guardarla
 │  │  ├─ entrada.js              # Registrar la entrada (y cobrar la mensualidad)
 │  │  ├─ liquidacion.js          # Cotizar y liquidar la salida
+│  │  ├─ lavadero.js             # Catálogo, ingreso y entrega del lavadero
 │  │  ├─ caja.js                 # Caja registradora y métricas de ventas
-│  │  ├─ printer.js              # Tiquete, recibo y página de prueba (ESC/POS)
+│  │  ├─ printer.js              # Tiquetes, recibos y página de prueba (ESC/POS)
 │  │  ├─ colaWindows.js          # Envío RAW a una impresora de Windows
 │  │  └─ tiempo.js               # Fechas locales formato SQLite
 │  └─ ipc/handlers.js            # Todos los canales IPC
@@ -111,12 +116,22 @@ src/
       │  ├─ NuevaEntrada.jsx     # Registro de ingreso
       │  ├─ Salida.jsx           # Cobro y comprobante (vista, no modal)
       │  ├─ Vehiculos.jsx        # Historial filtrable + ficha por placa
-      │  └─ Configuracion.jsx    # Métricas y caja + tarifas, reglas, negocio, impresora, tiquete
+      │  ├─ Lavadero.jsx         # Ingreso y entrega del lavadero + motos adentro
+      │  └─ Configuracion.jsx    # Métricas y caja + precios, lavadas, reglas, negocio, impresora, tiquete
       ├─ components/
       │  ├─ Rail.jsx             # Navegación oscura + estado del hardware
       │  ├─ CeldasGrid.jsx       # Mapa de celdas
       │  ├─ PanelVentas.jsx      # Ventas del día, semana y mes por método de pago
       │  ├─ PanelCaja.jsx        # Base, cuadre y cierre de la caja del día
+      │  ├─ CampoPesos.jsx       # Campos de pesos con punto de miles (y de enteros)
+      │  ├─ MetodoPago.jsx       # Efectivo / transferencia
+      │  ├─ TotalEditable.jsx    # Total a cobrar con lápiz para el valor acordado
+      │  ├─ CascoCustodia.jsx    # Casco en custodia + locker
+      │  ├─ TramosHora.jsx       # Editor de reglas por tiempo
+      │  ├─ SimulacionCobro.jsx  # Tabla de cobro por hora antes de guardar
+      │  ├─ TiposLavada.jsx      # Catálogo de lavadas
+      │  ├─ IngresoLavado.jsx    # Formulario de ingreso al lavadero
+      │  ├─ EntregaLavado.jsx    # Cobro y entrega de una lavada
       │  ├─ Icono.jsx            # Iconos propios, trazo 1.5
       │  └─ Toast.jsx            # Confirmaciones
       ├─ hooks/
@@ -156,17 +171,25 @@ la app: no hay internet en la caseta y el `Content-Security-Policy` sólo admite
 
 - **`settings`** — fila única (`id = 1`): nombre, NIT, dirección, teléfono, horario, total
   de celdas, tarifas (hora / amanecida / mensualidad), cargo por ticket perdido, minutos de
-  gracia, base predeterminada de la caja, configuración de la impresora térmica y
-  políticas del tiquete.
-- **`vehicles`** — un registro por ingreso: placa, marca, color, casco, celda, hora de entrada
-  y salida, tipo de tarifa, tarifa personalizada, estado (`activo` / `finalizado`).
-  Un índice único parcial impide que la misma placa esté activa dos veces.
-- **`transactions`** — historial de pagos: vehículo, placa, monto base, recargo, total,
-  minutos, tipo de tarifa, tipo (`normal` / `ticket_perdido`) y método de pago
-  (`efectivo` / `transferencia`).
+  gracia, reglas por tiempo, base predeterminada de la caja, configuración de la impresora
+  térmica y políticas del tiquete.
+- **`vehicles`** — un registro por ingreso: placa, marca, color, casco y locker, celda,
+  hora de entrada y salida, tipo de tarifa, tarifa personalizada, estado (`activo` /
+  `finalizado`). Un índice único parcial impide que la misma placa esté activa dos veces.
+- **`transactions`** — historial de pagos del parqueadero: vehículo, placa, monto base,
+  recargo, ajuste (valor acordado − calculado), total, minutos, tipo de tarifa, tipo
+  (`normal` / `ticket_perdido`) y método de pago (`efectivo` / `transferencia`).
 - **`caja_dias`** — una fila por jornada (`'YYYY-MM-DD'`): base inicial, hora de apertura y,
-  al cerrar, el dinero contado, la diferencia y las observaciones. El efectivo del día
-  **no** se guarda aquí: se suma siempre desde `transactions`.
+  al cerrar, el dinero contado, la diferencia, lo que quedó en el cajón para la jornada
+  siguiente y las observaciones. El efectivo del día **no** se guarda aquí: se suma siempre
+  desde la vista `ventas`.
+- **`tipos_lavada`** — el catálogo del lavadero: nombre y precio. Un tipo retirado deja de
+  ofrecerse pero no se borra.
+- **`lavados`** — cada moto que entra al lavadero: placa, marca, color, casco y locker, la
+  lavada y su precio **copiados al ingresar**, si el valor se pactó, horas de entrada y
+  entrega, estado (`activo` / `entregado`) y el cobro (ajuste, total, método de pago).
+- **`ventas`** (vista) — junta lo cobrado en el parqueadero y en el lavadero. De aquí salen
+  las métricas y la caja.
 
 Todos los montos son enteros en COP. Las fechas se guardan como texto
 `'YYYY-MM-DD HH:MM:SS'` en hora local.
@@ -175,7 +198,7 @@ Todos los montos son enteros en COP. Las fechas se guardan como texto
 
 | Tipo de tarifa  | Cálculo                                                                   |
 | --------------- | ------------------------------------------------------------------------- |
-| Por hora        | Hora iniciada × tarifa, con **tope de amanecida** por cada bloque de 24 h  |
+| Por hora        | Hora iniciada × tarifa (o el valor fijo de una regla por tiempo), con **tope de amanecida** por cada bloque de 24 h |
 | Amanecida       | Tarifa fija por cada bloque de 24 h iniciado                              |
 | Mensualidad     | Tarifa de mensualidad **cobrada al registrar la entrada**; $0 a la salida |
 | Personalizada   | Valor fijo pactado al ingresar                                            |
@@ -183,6 +206,25 @@ Todos los montos son enteros en COP. Las fechas se guardan como texto
 Si la moto sale dentro de los *minutos de gracia* (10 por defecto, inclusive) no se cobra
 nada, salvo con tarifa personalizada, que siempre cobra lo pactado.
 El **ticket perdido** suma $2.000 al total (configurable); no aplica a la mensualidad.
+
+### Reglas por tiempo
+
+En *Configuración → Precios → Reglas por tiempo* el administrador arma tramos con un
+valor fijo: *"más de 5 h y hasta 12 h se cobran $10.000"*. Con la hora a $2.000:
+
+| Estadía | Cobro |
+| ------- | ----- |
+| 1 a 5 h | $2.000 por hora iniciada (hasta $10.000) |
+| más de 5 h y hasta 12 h | $10.000 fijos |
+| más de 12 h | otra vez por hora, con el tope de la amanecida |
+
+Se pueden crear varias reglas, siempre que no se crucen. Debajo, la tabla *"Así queda el
+cobro por hora"* muestra qué se cobraría de 1 a 24 h **con los valores en pantalla, antes
+de guardar**, calculada con la misma función que cobra; si una regla está incompleta o se
+cruza con otra, ahí mismo aparece el aviso y no se deja guardar.
+
+Los precios se validan al guardar: un campo vacío o negativo no se guarda (antes un precio
+vacío quedaba cobrando $0). Todos los montos se escriben y se leen con punto de miles.
 
 ## Mensualidad
 
@@ -213,21 +255,63 @@ otra tarifa.
    celda ocupada del panel.
 2. La vista muestra placa, hora de llegada, permanencia, tarifa y total a cobrar.
    Con *Perdió el tiquete* el total incluye el recargo de $2.000.
-3. El operario escoge el **método de pago** (*Efectivo* o *Transferencia*). Es obligatorio:
+3. Si se acuerda otro valor con el cliente al pagar (un descuento, casi siempre), el
+   **lápiz** junto al total permite escribir lo que se va a cobrar. La pantalla muestra el
+   descuento y lo calculado; *Quitar* vuelve a lo calculado. Lo que se cobra y suma a las
+   ventas y a la caja es el valor acordado, y el recibo imprime el descuento.
+4. El operario escoge el **método de pago** (*Efectivo* o *Transferencia*). Es obligatorio:
    el botón de cobro no se habilita sin él, porque decide si el dinero entra a la caja.
-4. **Cobrar** cierra el ingreso, libera la celda y guarda la transacción en una sola
-   operación atómica; luego muestra el comprobante con el número de recibo.
+5. **Cobrar e imprimir** (o `Enter`) cierra el ingreso, libera la celda, guarda la
+   transacción en una sola operación atómica e imprime el recibo. **Cobrar sin imprimir**
+   hace lo mismo sin sacar papel, aunque la impresión automática esté encendida; el
+   recibo se puede imprimir después desde el comprobante (sale como original, no como
+   copia).
 
 Si el cobro ya se registró y la impresora falla, la salida **no** se revierte: el recibo
 queda guardado y se puede reimprimir desde el comprobante o desde la ficha del vehículo.
+
+## Lavadero
+
+Se abre con `F6` (o el icono de la gota del rail). Antes de usarlo, el administrador crea
+las lavadas en *Configuración → Tipos de lavada*: cada una con su nombre y cualquier
+precio. Se pueden corregir o dejar de ofrecer; una moto que ya está en el lavadero
+conserva el nombre y el precio con que entró.
+
+**Ingresar moto**
+
+1. Placa (obligatoria) y **tipo de lavada** (obligatorio).
+2. *Otro valor, pactado con el cliente*, si la lavada se negoció: reemplaza el precio de
+   lista.
+3. Marca y color (opcionales) y, si deja el casco, el **locker** donde quedó (opcional).
+4. *Ingresar al lavadero* guarda la moto y **pregunta si se imprime el tiquete de
+   ingreso**: `Enter` imprime, `Esc` no. El tiquete se puede reimprimir después.
+
+**Entregar y cobrar**: se escoge la moto en la lista de la derecha, se escanea su tiquete
+o se digita la placa. Como en la salida del parqueadero: lápiz para el valor final,
+método de pago obligatorio y *Cobrar e imprimir* / *Cobrar sin imprimir*. Lo cobrado entra
+a las ventas y, si es en efectivo, a la caja del día.
+
+A la derecha están siempre las motos que hay en el lavadero (con su lavada, valor y
+locker) y las entregadas hoy, con un botón para imprimir su recibo.
+
+## Casco en custodia
+
+Al marcar *Deja el casco en custodia* (en *Nueva entrada* y en el lavadero) aparece el
+campo **Locker asignado**, opcional. El locker se ve en la salida, en la ficha del
+vehículo y en la lista del lavadero. **Ningún papel impreso dice si se dejó el casco** ni
+en qué locker.
 
 ## Métricas y caja
 
 Se abre con `F5` (o el icono de gráfica del rail) y tiene dos secciones:
 
 - **Ventas** — totales del día, de la semana en curso (desde el lunes) y del mes en curso
-  (desde el día 1), cada uno separado en efectivo y transferencia, más la serie diaria del
-  mes.
+  (desde el día 1), cada uno separado en efectivo y transferencia. Incluyen el lavadero,
+  que además se muestra aparte (*"lavadero $…"*). Debajo, la gráfica **Ventas por día del
+  mes**: una barra por día, con el efectivo abajo y la transferencia arriba, y una línea
+  punteada con el promedio diario. El eje siempre es el mes completo: los días sin cobros
+  y los que faltan quedan vacíos, y el número de hoy va en negrilla. Al pasar el mouse por
+  una barra se ve el día con su total, efectivo y transferencia.
 - **Caja del día** — el cuadre del cajón físico:
 
   ```
@@ -239,16 +323,27 @@ Se abre con `F5` (o el icono de gráfica del rail) y tiene dos secciones:
 
 Funcionamiento de la jornada:
 
-- La jornada del día se crea sola con la *base predeterminada* (Configuración → Precios)
-  la primera vez que se consulta la caja o se cobra en efectivo. Nunca hay que "abrir caja"
-  para poder cobrar.
+- La jornada del día se crea sola la primera vez que se consulta la caja o se cobra en
+  efectivo. Nunca hay que "abrir caja" para poder cobrar.
+- **Abre con lo que quedó en el cajón al cerrar la jornada anterior**: la plata que pasa
+  la noche en el cajón es la base de la mañana, y la vista dice de qué cierre viene. Si
+  la anterior no se cerró (o es la primera), abre con la *base predeterminada*
+  (Configuración → Precios).
 - La base se puede corregir en cualquier momento del día con *Guardar*.
 - **Cerrar caja** pide el dinero contado y guarda la diferencia con signo: positiva es
-  sobrante, negativa es faltante. Un día sólo se cierra una vez.
+  sobrante, negativa es faltante. Un día sólo se cierra una vez. *Queda en el cajón para
+  mañana* es lo que se deja para la jornada siguiente; el resto se retira. Vacío, queda
+  todo lo contado.
+- Si la jornada anterior **quedó sin cerrar**, la caja de hoy lo avisa con *Cerrar esa
+  jornada*: se cuenta y se cierra aunque ya sea otro día. Después, *Usar ese valor* toma
+  lo que quedó como base de hoy. En *Otras jornadas* se ven los últimos cierres (lo
+  contado, lo que quedó y si cuadró) y las jornadas sin cerrar se abren desde ahí.
 - Un cierre equivocado se puede **reabrir**: se borra el conteo y se conservan la base y
   los cobros.
 - Los cobros posteriores al cierre se siguen registrando (la caja no bloquea la salida de
-  motos), pero la diferencia guardada es la del momento del cierre.
+  motos), pero la diferencia guardada es la del momento del cierre. Si después del cierre
+  se cobra en efectivo, la caja lo avisa: hay que reabrir y cerrar otra vez para que la
+  próxima jornada abra con esa plata.
 
 ## Hardware
 
@@ -273,7 +368,7 @@ está encendida.
 > `node-thermal-printer` exige un módulo nativo para hablar con Windows y fallaba con
 > *"No driver set!"*. Se reemplazó por el envío RAW descrito arriba.
 
-Imprime cuatro papeles:
+Imprime seis papeles:
 
 - **Tiquete de entrada** (~16 cm):
   - Encabezado: nombre del negocio en letra grande, dirección, horario y teléfono
@@ -282,12 +377,18 @@ Imprime cuatro papeles:
   - **Código de barras Code 128 de la placa**: 17,5 mm de alto y unos 38 mm de ancho
     (módulo de 3 puntos) para placas de hasta 6 caracteres, centrado con margen en blanco
     para que el lector lo tome de una.
-  - Hora de entrada (en negrilla), celda, tarifa, vehículo y casco.
+  - Hora de entrada (en negrilla), celda, tarifa y vehículo. No dice si se dejó el casco.
   - Las **políticas** en letra menuda (sección *Tiquete*).
 - **Recibo de salida** (~13 cm): mismo encabezado más el NIT, número de recibo, placa,
-  entrada, **hora de salida** (en negrilla), permanencia, tarifa, desglose, total y método
-  de pago. Una reimpresión sale marcada `** COPIA **` para que no pueda usarse dos veces
-  como comprobante.
+  entrada, **hora de salida** (en negrilla), permanencia, tarifa, desglose (con el
+  *descuento acordado*, si lo hubo), total cobrado y método de pago. Una reimpresión sale
+  marcada `** COPIA **` para que no pueda usarse dos veces como comprobante; si se cobró
+  sin imprimir, el primer papel que sale es el original.
+- **Tiquete de lavadero**: "TIQUETE DE LAVADERO", la placa en letra triple, un código de
+  barras propio (`LAV` + número de servicio, p. ej. `LAV000123`), hora de entrada, la
+  lavada y su valor. Sólo se imprime si el operario dice que sí al ingresar la moto.
+- **Recibo de lavadero**: con numeración propia (*RECIBO LAVADERO No.*), entrada, entrega,
+  la lavada, el descuento acordado si lo hubo, total y método de pago.
 - **Comprobante de mensualidad**: se imprime al registrar la entrada. Es el mismo recibo
   con la fecha del pago, la tarifa *Mensualidad* y el total, sin hora de salida,
   permanencia, método de pago ni código de barras.
@@ -311,7 +412,9 @@ escucha en todas las pantallas y lo distingue de una persona por la velocidad �
 si todas las teclas llegan con menos de 35 ms de separación y el código cierra
 con Enter, es una lectura.
 
-- Placa que está adentro → abre su salida con el cobro ya calculado.
+- Tiquete de lavadero (`LAV…`) → abre la entrega de esa moto en el lavadero.
+- Placa que está en el parqueadero → abre su salida con el cobro ya calculado.
+- Placa que sólo está en el lavadero → abre su entrega.
 - Placa que no está adentro → abre su ficha en Vehículos.
 - Con el foco en un campo de placa, el código cae en el campo y no cambia de vista.
 
@@ -319,21 +422,25 @@ con Enter, es una lectura.
 
 - `F1`–`F4` — Panel, Nueva entrada, Registrar salida, Vehículos
 - `F5` — Métricas y caja
+- `F6` — Lavadero
 - `F8` — Configuración
-- `Enter` — cobra en la vista de salida; en el comprobante, pasa al siguiente cliente
-- `Esc` — despeja la vista de salida
+- `Enter` — cobra e imprime en la salida y en la entrega del lavadero; en el comprobante,
+  pasa al siguiente. Editando el total, aplica el valor. En la pregunta del tiquete de
+  lavadero, imprime.
+- `Esc` — despeja la vista de salida o de entrega; editando el total, lo cancela; en la
+  pregunta del tiquete, sigue sin imprimir
 
 ## Estado
 
-- **Listo:** estructura, base de datos, IPC, las cinco vistas, cálculo de tarifas,
-  liquidación normal, ticket perdido, método de pago (efectivo / transferencia),
-  comprobante, historial por placa, métricas de ventas, caja registradora con cierre
-  diario, configuración editable, impresión térmica y lector de código de barras.
+- **Listo:** estructura, base de datos, IPC, las seis vistas, cálculo de tarifas con
+  reglas por tiempo, liquidación normal, ticket perdido, valor acordado al cobrar, cobrar
+  con o sin imprimir, método de pago (efectivo / transferencia), comprobante, historial
+  por placa, métricas de ventas, caja registradora con cierre diario y la base que pasa de
+  un día al siguiente, configuración editable y validada, lavadero, locker del casco, impresión térmica y lector de código de
+  barras.
 - **Por verificar en el equipo del cliente** (no hay térmica en el equipo de desarrollo):
   que la JAL58M acepte trabajos RAW por su cola de Windows, que imprima tildes con la
   página PC858 y la letra menuda (fuente B) a 42 caracteres, y que el lector lea el
   código del tiquete. La página de prueba cubre las cuatro cosas. El contenido y las
   medidas de los papeles están verificados con una simulación de los bytes ESC/POS.
-- **Preparado, sin construir:** el módulo de Lavadero. La navegación le reserva el
-  puesto en [`Rail.jsx`](src/renderer/src/components/Rail.jsx); falta el modelo de
-  datos (servicios, tarifas por tipo de lavado y estado del lavado).
+  Falta también comprobar que el lector tome el código del tiquete de lavadero.

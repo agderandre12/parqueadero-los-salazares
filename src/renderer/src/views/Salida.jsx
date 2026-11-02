@@ -1,5 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import Icono from '../components/Icono.jsx'
+import MetodoPago from '../components/MetodoPago.jsx'
+import TotalEditable from '../components/TotalEditable.jsx'
 import {
   celda as fmtCelda,
   cop,
@@ -8,8 +10,7 @@ import {
   normalizarPlaca,
   permanencia,
   ETIQUETA_METODO,
-  ETIQUETA_TARIFA,
-  METODOS_PAGO
+  ETIQUETA_TARIFA
 } from '../lib/format.js'
 
 /*
@@ -30,12 +31,16 @@ export default function Salida({ placaInicial, ahora, onLiquidado, onAviso }) {
   // Sin valor por defecto a propósito: el método de pago decide si el dinero
   // entra o no a la caja, así que tiene que ser una decisión explícita.
   const [metodoPago, setMetodoPago] = useState(null)
+  // Valor pactado con el cliente al pagar; null = se cobra lo calculado.
+  const [acordado, setAcordado] = useState(null)
+  const [editandoTotal, setEditandoTotal] = useState(false)
   const buscadorRef = useRef(null)
 
   const cargoTicket = datos?.settings?.cargo_ticket_perdido ?? 2000
   // La mensualidad se pagó al entrar: su salida no cobra ni pide método de pago.
   const esMensualidad = datos?.vehicle?.tipo_tarifa === 'mensualidad'
-  const puedeCobrar = fase === 'listo' && (esMensualidad || Boolean(metodoPago))
+  const puedeCobrar =
+    fase === 'listo' && !editandoTotal && (esMensualidad || Boolean(metodoPago))
 
   /** Cotiza una placa concreta y la deja lista para cobrar. */
   const cotizar = useCallback(async (placa, conRecargo) => {
@@ -63,6 +68,13 @@ export default function Salida({ placaInicial, ahora, onLiquidado, onAviso }) {
     else buscadorRef.current?.focus()
   }, [placaInicial, cotizar])
 
+  // Un valor acordado es para esa moto: otra placa arranca con lo calculado.
+  // Marcar el tiquete perdido recotiza la misma moto y no lo borra.
+  useEffect(() => {
+    setAcordado(null)
+    setEditandoTotal(false)
+  }, [datos?.vehicle?.id])
+
   // Recotiza al marcar ticket perdido: el recargo cambia el total.
   useEffect(() => {
     if (fase === 'listo' && datos?.vehicle) cotizar(datos.vehicle.placa, ticketPerdido)
@@ -88,9 +100,13 @@ export default function Salida({ placaInicial, ahora, onLiquidado, onAviso }) {
     }
   }, [texto, fase])
 
+  /*
+   * `imprimir` es el botón que se usó, y es lo que manda: "Cobrar sin
+   * imprimir" no imprime aunque la impresión automática esté encendida.
+   */
   const cobrar = useCallback(
     async (imprimir) => {
-      if (fase !== 'listo' || !datos) return
+      if (fase !== 'listo' || !datos || editandoTotal) return
       if (!esMensualidad && !metodoPago) {
         onAviso?.({ tipo: 'error', texto: 'Seleccione el método de pago antes de cobrar' })
         return
@@ -100,7 +116,13 @@ export default function Salida({ placaInicial, ahora, onLiquidado, onAviso }) {
       const res = await window.api.vehiculos.liquidar(
         esMensualidad
           ? { vehicleId: datos.vehicle.id }
-          : { vehicleId: datos.vehicle.id, ticketPerdido, metodoPago }
+          : {
+              vehicleId: datos.vehicle.id,
+              ticketPerdido,
+              metodoPago,
+              imprimir,
+              totalAcordado: acordado ?? undefined
+            }
       )
 
       if (!res.ok) {
@@ -109,26 +131,35 @@ export default function Salida({ placaInicial, ahora, onLiquidado, onAviso }) {
         return
       }
 
-      setRecibo(res.data)
+      setRecibo({ ...res.data, imprimir })
       setFase('hecho')
       onLiquidado?.(res.data)
 
-      // La liquidación ya intentó imprimir si la impresión automática está
-      // activa. Este botón fuerza la copia cuando el operario la pidió y la
-      // automática está apagada o falló.
       if (imprimir && res.data.transaccion && !res.data.impresion?.ok) {
-        const rei = await window.api.impresora.reimprimir(res.data.transaccion.id)
-        if (!rei.ok || !rei.data?.ok) {
-          onAviso?.({
-            tipo: 'error',
-            texto: 'Cobro guardado, pero el recibo no se imprimió',
-            detalle: rei.data?.motivo || rei.error
-          })
-        }
+        onAviso?.({
+          tipo: 'error',
+          texto: 'Cobro guardado, pero el recibo no se imprimió',
+          detalle: res.data.impresion?.motivo
+        })
       }
     },
-    [fase, datos, esMensualidad, ticketPerdido, metodoPago, onLiquidado, onAviso]
+    [fase, datos, editandoTotal, esMensualidad, ticketPerdido, metodoPago, acordado, onLiquidado, onAviso]
   )
+
+  /** Recibo desde el comprobante: el original si se cobró sin imprimir, si no una copia. */
+  async function imprimirRecibo() {
+    const res = await window.api.impresora.reimprimir(recibo.transaccion.id)
+    if (res.ok && res.data?.ok) {
+      onAviso?.({ tipo: 'ok', texto: 'Recibo enviado a la impresora' })
+      setRecibo((r) => ({ ...r, impresion: { ok: true } }))
+    } else {
+      onAviso?.({
+        tipo: 'error',
+        texto: 'No se pudo imprimir',
+        detalle: res.data?.motivo || res.error
+      })
+    }
+  }
 
   function limpiar() {
     setTexto('')
@@ -142,8 +173,10 @@ export default function Salida({ placaInicial, ahora, onLiquidado, onAviso }) {
   }
 
   // Enter cobra; en el comprobante, Enter despeja para el siguiente cliente.
+  // Mientras se edita el total, Enter y Esc son del campo.
   useEffect(() => {
     const alTeclear = (e) => {
+      if (editandoTotal) return
       if (e.key === 'Escape' && fase !== 'cobrando') return limpiar()
       if (e.key !== 'Enter') return
       if (fase === 'listo') {
@@ -156,10 +189,11 @@ export default function Salida({ placaInicial, ahora, onLiquidado, onAviso }) {
     }
     window.addEventListener('keydown', alTeclear)
     return () => window.removeEventListener('keydown', alTeclear)
-  }, [fase, cobrar])
+  }, [fase, cobrar, editandoTotal])
 
   const cobro = fase === 'hecho' ? recibo?.cobro : datos?.cobro
   const vehiculo = fase === 'hecho' ? recibo?.vehicle : datos?.vehicle
+  const transaccion = recibo?.transaccion
 
   return (
     <div className="h-full overflow-y-auto p-5">
@@ -286,6 +320,9 @@ export default function Salida({ placaInicial, ahora, onLiquidado, onAviso }) {
                   <span className="flex items-center gap-1.5">
                     <Icono nombre="casco" tam={15} />
                     Casco en custodia
+                    {vehiculo.locker && (
+                      <b className="font-medium text-tinta num">· locker {vehiculo.locker}</b>
+                    )}
                   </span>
                 )}
               </div>
@@ -340,16 +377,25 @@ export default function Salida({ placaInicial, ahora, onLiquidado, onAviso }) {
                 </div>
               )}
 
-              <div className="pt-3.5">
-                <div className="text-micro font-medium text-grafito">
-                  {fase === 'hecho' ? 'Total cobrado' : 'Total a cobrar'}
-                </div>
-                <div className="text-total font-semibold num tracking-tight mt-1">
-                  {cop(cobro.total)}
-                </div>
-              </div>
+              {fase === 'hecho' ? (
+                <TotalEditable
+                  editable={false}
+                  etiqueta="Total cobrado"
+                  calculado={cobro.total}
+                  acordado={transaccion?.ajuste ? transaccion.monto : null}
+                />
+              ) : (
+                <TotalEditable
+                  key={vehiculo?.id}
+                  editable={!esMensualidad && fase === 'listo'}
+                  calculado={cobro.total}
+                  acordado={acordado}
+                  onAcordar={setAcordado}
+                  onEditando={setEditandoTotal}
+                />
+              )}
 
-              {fase === 'hecho' && !recibo.transaccion ? (
+              {fase === 'hecho' && !transaccion ? (
                 <>
                   <div className="mt-4 rounded-campo border border-linea bg-lienzo px-3 py-3">
                     <p className="text-base font-medium flex items-center gap-2">
@@ -369,19 +415,14 @@ export default function Salida({ placaInicial, ahora, onLiquidado, onAviso }) {
                   <div className="mt-4 flex items-center justify-between rounded-campo border border-linea px-3 py-2.5">
                     <span className="flex items-center gap-2 text-base font-medium">
                       <Icono
-                        nombre={
-                          recibo.transaccion.metodo_pago === 'efectivo'
-                            ? 'efectivo'
-                            : 'transferencia'
-                        }
+                        nombre={transaccion.metodo_pago === 'efectivo' ? 'efectivo' : 'transferencia'}
                         tam={16}
                         className="text-azul-700"
                       />
-                      {ETIQUETA_METODO[recibo.transaccion.metodo_pago] ||
-                        recibo.transaccion.metodo_pago}
+                      {ETIQUETA_METODO[transaccion.metodo_pago] || transaccion.metodo_pago}
                     </span>
                     <span className="text-micro text-grafito">
-                      {recibo.transaccion.metodo_pago === 'efectivo'
+                      {transaccion.metodo_pago === 'efectivo'
                         ? 'Sumado a la caja'
                         : 'A cuentas digitales'}
                     </span>
@@ -391,23 +432,21 @@ export default function Salida({ placaInicial, ahora, onLiquidado, onAviso }) {
                     <p className="text-base font-medium flex items-center gap-2">
                       <Icono nombre="visto" tam={16} className="text-azul-700" />
                       Recibo N.° <span className="num">
-                        {String(recibo.transaccion.id).padStart(6, '0')}
+                        {String(transaccion.id).padStart(6, '0')}
                       </span>
                     </p>
                     <p className="mt-1 text-micro text-grafito">
                       {recibo.impresion?.ok
                         ? 'Impreso en la JAL58M.'
-                        : `Sin imprimir: ${recibo.impresion?.motivo || 'impresora no disponible'}`}
+                        : recibo.imprimir === false
+                          ? 'Se cobró sin imprimir el recibo.'
+                          : `Sin imprimir: ${recibo.impresion?.motivo || 'impresora no disponible'}`}
                     </p>
                   </div>
 
-                  <button
-                    type="button"
-                    onClick={() => window.api.impresora.reimprimir(recibo.transaccion.id)}
-                    className="btn-neutro w-full mt-3"
-                  >
+                  <button type="button" onClick={imprimirRecibo} className="btn-neutro w-full mt-3">
                     <Icono nombre="impresora" tam={16} />
-                    Imprimir copia
+                    {recibo.impresion?.ok ? 'Imprimir copia' : 'Imprimir recibo'}
                   </button>
                   <button type="button" onClick={limpiar} className="btn-azul w-full py-3 mt-2">
                     Siguiente cliente
@@ -425,34 +464,12 @@ export default function Salida({ placaInicial, ahora, onLiquidado, onAviso }) {
                 </button>
               ) : (
                 <>
-                  <fieldset className="mt-5" disabled={fase === 'cobrando'}>
-                    <legend className="etiqueta">Método de pago</legend>
-                    <div className="grid grid-cols-2 gap-1.5">
-                      {METODOS_PAGO.map((m) => {
-                        const activo = metodoPago === m.id
-                        return (
-                          <button
-                            key={m.id}
-                            type="button"
-                            aria-pressed={activo}
-                            onClick={() => setMetodoPago(m.id)}
-                            className={`flex flex-col items-center gap-1 rounded-campo border px-2 py-3
-                              transition-colors duration-rapido ease-salida
-                              disabled:opacity-45 disabled:cursor-not-allowed
-                              ${
-                                activo
-                                  ? 'border-azul bg-azul-50 text-azul-700'
-                                  : 'border-linea-fuerte text-grafito hover:border-niebla hover:bg-lienzo'
-                              }`}
-                          >
-                            <Icono nombre={m.icono} tam={19} />
-                            <span className="text-base font-medium">{m.etiqueta}</span>
-                            <span className="text-micro text-niebla">{m.ayuda}</span>
-                          </button>
-                        )
-                      })}
-                    </div>
-                  </fieldset>
+                  <MetodoPago
+                    className="mt-5"
+                    valor={metodoPago}
+                    onChange={setMetodoPago}
+                    disabled={fase === 'cobrando'}
+                  />
 
                   <button
                     type="button"
@@ -472,9 +489,11 @@ export default function Salida({ placaInicial, ahora, onLiquidado, onAviso }) {
                     Cobrar sin imprimir
                   </button>
 
-                  {fase === 'listo' && !metodoPago && (
+                  {fase === 'listo' && (editandoTotal || !metodoPago) && (
                     <p className="mt-2 text-center text-micro text-niebla">
-                      Escoja cómo paga el cliente para habilitar el cobro.
+                      {editandoTotal
+                        ? 'Aplique o cancele el nuevo valor para cobrar.'
+                        : 'Escoja cómo paga el cliente para habilitar el cobro.'}
                     </p>
                   )}
                 </>

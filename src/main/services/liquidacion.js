@@ -2,10 +2,9 @@ import { enTransaccion } from '../db/index.js'
 import { getSettings } from '../db/settingsRepo.js'
 import * as vehiculos from '../db/vehiclesRepo.js'
 import * as transacciones from '../db/transactionsRepo.js'
-import * as cajaRepo from '../db/cajaRepo.js'
-import { calcularCobro } from './pricing.js'
-import { normalizarMetodoPago } from './caja.js'
-import { imprimirRecibo } from './printer.js'
+import { calcularCobro, totalCobrado } from './pricing.js'
+import { asegurarJornada, normalizarMetodoPago } from './caja.js'
+import { debeImprimir, imprimirRecibo, sinImprimir } from './printer.js'
 import { ahoraSql } from './tiempo.js'
 
 /**
@@ -27,6 +26,14 @@ export function cotizar({ placa, ticketPerdido = false }) {
  * `metodoPago` es obligatorio ('efectivo' | 'transferencia'): de él depende si
  * el cobro entra o no al saldo físico de la caja registradora.
  *
+ * `totalAcordado` (opcional) es el valor que el operario pactó con el cliente
+ * al pagar, casi siempre un descuento: es lo que se cobra y lo que suma a las
+ * ventas. La diferencia con lo calculado queda en `transaccion.ajuste`.
+ *
+ * `imprimir` es el botón que usó el operario: true imprime el recibo aunque la
+ * impresión automática esté apagada y false cobra sin imprimir aunque esté
+ * encendida. Sin él, decide la configuración.
+ *
  * La mensualidad es la excepción: se pagó al entrar (`services/entrada.js`),
  * así que su salida sólo libera la celda — sin método de pago, sin venta y sin
  * recibo. `transaccion` e `impresion` vuelven en null.
@@ -35,7 +42,14 @@ export function cotizar({ placa, ticketPerdido = false }) {
  * revierte el cobro: si la impresora falla, la salida ya quedó registrada y el
  * resultado lo informa en `impresion`.
  */
-export async function liquidar({ vehicleId, placa, ticketPerdido = false, metodoPago }) {
+export async function liquidar({
+  vehicleId,
+  placa,
+  ticketPerdido = false,
+  metodoPago,
+  totalAcordado,
+  imprimir
+}) {
   const settings = getSettings()
 
   const vehicle = vehicleId
@@ -54,6 +68,7 @@ export async function liquidar({ vehicleId, placa, ticketPerdido = false, metodo
 
   const metodo = normalizarMetodoPago(metodoPago)
   const cobro = calcularCobro({ vehicle, settings, ticketPerdido })
+  const { ajuste } = totalCobrado(cobro.total, totalAcordado)
 
   const { vehicle: finalizado, transaccion } = enTransaccion(() => {
     const actualizado = vehiculos.finalizar(vehicle.id, salida)
@@ -62,6 +77,7 @@ export async function liquidar({ vehicleId, placa, ticketPerdido = false, metodo
       placa: vehicle.placa,
       monto_base: cobro.montoBase,
       recargo: cobro.recargo,
+      ajuste,
       minutos: cobro.minutos,
       tipo_tarifa: cobro.tipoTarifa,
       tipo: ticketPerdido ? 'ticket_perdido' : 'normal',
@@ -74,15 +90,13 @@ export async function liquidar({ vehicleId, placa, ticketPerdido = false, metodo
      * existir aunque nadie haya abierto la caja hoy. El saldo se deriva de las
      * transacciones, así que basta con garantizar la fila y su base.
      */
-    if (metodo === 'efectivo') {
-      cajaRepo.asegurarDia(salida.slice(0, 10), settings.caja_base_predeterminada)
-    }
+    if (metodo === 'efectivo') asegurarJornada(salida.slice(0, 10))
 
     return { vehicle: actualizado, transaccion: registro }
   })
 
-  let impresion = { ok: false, motivo: 'Impresión automática desactivada' }
-  if (settings.imprimir_automatico) {
+  let impresion = sinImprimir(imprimir)
+  if (debeImprimir(imprimir, settings)) {
     impresion = await imprimirRecibo({ settings, vehicle: finalizado, cobro, transaccion })
     if (impresion.ok) transacciones.marcarImpreso(transaccion.id, true)
   }

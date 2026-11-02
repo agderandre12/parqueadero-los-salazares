@@ -2,8 +2,7 @@ import { enTransaccion } from '../db/index.js'
 import { getSettings } from '../db/settingsRepo.js'
 import * as vehiculos from '../db/vehiclesRepo.js'
 import * as transacciones from '../db/transactionsRepo.js'
-import * as cajaRepo from '../db/cajaRepo.js'
-import { normalizarMetodoPago } from './caja.js'
+import { asegurarJornada, normalizarMetodoPago } from './caja.js'
 import { imprimirRecibo, imprimirTiquete } from './printer.js'
 import { ahoraSql } from './tiempo.js'
 
@@ -64,9 +63,7 @@ export async function registrarEntrada(datos = {}) {
       fecha: entrada
     })
 
-    if (metodo === 'efectivo') {
-      cajaRepo.asegurarDia(entrada.slice(0, 10), settings.caja_base_predeterminada)
-    }
+    if (metodo === 'efectivo') asegurarJornada(entrada.slice(0, 10))
 
     return { vehicle: creado, transaccion: venta }
   })

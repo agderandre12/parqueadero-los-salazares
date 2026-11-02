@@ -1,12 +1,12 @@
 import { useCallback, useEffect, useState } from 'react'
 import Icono from './Icono.jsx'
-import { cop, diaCorto, fecha as fmtFecha, miles } from '../lib/format.js'
+import { cop, fecha as fmtFecha, isoLocal, miles, parseSql } from '../lib/format.js'
 
 /*
  * Analítica de ventas del administrador: día, semana en curso y mes en curso,
  * siempre en pesos y siempre partidas en efectivo / transferencia. La partición
  * no es decorativa: es la que explica por qué el cajón tiene menos dinero que
- * las ventas totales.
+ * las ventas totales. Incluyen el lavadero, que además se informa aparte.
  */
 
 const PERIODOS = [
@@ -34,6 +34,7 @@ function Tarjeta({ etiqueta, ayuda, datos, destacada }) {
       <div className="text-dato font-semibold num tracking-tight mt-1">{cop(total)}</div>
       <p className="text-micro text-niebla num mt-0.5">
         {miles(datos?.operaciones ?? 0)} {datos?.operaciones === 1 ? 'cobro' : 'cobros'}
+        {datos?.lavadero > 0 && <> · lavadero {cop(datos.lavadero)}</>}
       </p>
 
       {/* Una sola barra: cuánto del periodo entró en billetes y cuánto no. */}
@@ -64,9 +65,52 @@ function Tarjeta({ etiqueta, ayuda, datos, destacada }) {
   )
 }
 
-/** Tendencia diaria del mes. Sin ejes: sólo la forma y el máximo rotulado. */
-function Tendencia({ serie }) {
-  if (!serie?.length) {
+/**
+ * Todos los días del periodo, también los que no tuvieron cobros: si se
+ * saltaran, la gráfica juntaría fechas sin avisar y parecería que no pasó el
+ * tiempo.
+ */
+function diasDelPeriodo(serie, desde, hasta) {
+  if (!desde || !hasta) return []
+  const porDia = new Map((serie || []).map((d) => [d.dia, d]))
+  const fin = parseSql(hasta)
+  const dias = []
+  for (let d = parseSql(desde); d <= fin; d = new Date(d.getFullYear(), d.getMonth(), d.getDate() + 1)) {
+    const iso = isoLocal(d)
+    dias.push(porDia.get(iso) ?? { dia: iso, efectivo: 0, transferencia: 0, total: 0 })
+  }
+  return dias
+}
+
+/** Total del periodo entre los días que lleva (los días sin cobros cuentan). */
+function promedioDiario(periodo) {
+  if (!periodo?.desde || !periodo?.hasta) return 0
+  const dias = Math.round((parseSql(periodo.hasta) - parseSql(periodo.desde)) / 86400000) + 1
+  return Math.round((periodo.total || 0) / Math.max(1, dias))
+}
+
+/** 'mié, 28/10' para la etiqueta emergente de cada día. */
+const diaSemana = (iso) =>
+  parseSql(iso).toLocaleDateString('es-CO', { weekday: 'short', day: '2-digit', month: '2-digit' })
+
+/** Último día del mes de una fecha 'YYYY-MM-DD'. */
+const finDeMes = (iso) => {
+  const d = parseSql(iso)
+  return isoLocal(new Date(d.getFullYear(), d.getMonth() + 1, 0))
+}
+
+/**
+ * Ventas de cada día del mes. Cada barra se parte como las tarjetas: efectivo
+ * abajo, transferencia arriba. La escala sólo rotula el máximo y el cero, y la
+ * línea punteada es el promedio diario: con eso se lee si un día estuvo flojo o
+ * bueno sin llenar la gráfica de números.
+ *
+ * El eje es el mes completo, también los días que faltan: si sólo llegara a
+ * hoy, el día 2 del mes serían dos barras de media pantalla cada una.
+ */
+function Tendencia({ serie, desde, hasta }) {
+  const dias = diasDelPeriodo(serie, desde, hasta && finDeMes(hasta))
+  if (!dias.some((d) => d.total > 0)) {
     return (
       <p className="px-4 py-8 text-center text-mini text-niebla">
         Todavía no hay cobros registrados este mes.
@@ -74,34 +118,90 @@ function Tendencia({ serie }) {
     )
   }
 
-  const maximo = Math.max(...serie.map((d) => d.total), 1)
+  const maximo = Math.max(...dias.map((d) => d.total), 1)
+  const promedio = promedioDiario({ desde, hasta, total: dias.reduce((suma, d) => suma + d.total, 0) })
+  const alto = (valor) => `${(valor / maximo) * 100}%`
+  // El promedio es de los días que van: su línea termina en la barra de hoy.
+  // Cada barra mide (100% − huecos) / n, así que lo que sobra a la derecha es
+  // (100% + 3px) × faltan / n.
+  const faltan = dias.filter((d) => d.dia > hasta).length
 
   return (
     <div className="px-4 pb-4">
-      <div className="flex items-end gap-1 h-24" role="img" aria-label="Ventas por día del mes">
-        {serie.map((d) => (
-          <div key={d.dia} className="flex-1 min-w-0 flex flex-col justify-end h-full group relative">
-            <div
-              className="w-full rounded-t-[3px] bg-azul-200 group-hover:bg-azul transition-colors duration-rapido"
-              style={{ height: `${Math.max(3, Math.round((d.total / maximo) * 100))}%` }}
-            />
-            <span
-              role="tooltip"
-              className="pointer-events-none absolute bottom-full left-1/2 -translate-x-1/2 mb-1
-                         whitespace-nowrap rounded-md bg-tinta px-2 py-1 text-micro text-blanco
-                         opacity-0 shadow-lg transition-opacity duration-rapido
-                         group-hover:opacity-100 z-20 num"
-            >
-              {diaCorto(d.dia)} · {cop(d.total)}
-            </span>
-          </div>
-        ))}
-      </div>
+      <div className="flex gap-2">
+        <div className="flex h-40 w-16 shrink-0 flex-col justify-between text-right text-micro text-niebla num">
+          <span className="-mt-1.5">{cop(maximo)}</span>
+          <span className="-mb-1.5">{cop(0)}</span>
+        </div>
 
-      <div className="flex justify-between mt-1.5 text-micro text-niebla num">
-        <span>{diaCorto(serie[0].dia)}</span>
-        <span>Máximo {cop(maximo)}</span>
-        <span>{diaCorto(serie[serie.length - 1].dia)}</span>
+        <div className="relative min-w-0 flex-1">
+          <div
+            className="relative flex h-40 items-end gap-[3px] border-b border-linea-fuerte"
+            role="img"
+            aria-label={`Ventas por día del mes. Máximo ${cop(maximo)}, promedio ${cop(promedio)} por día`}
+          >
+            <div
+              className="pointer-events-none absolute left-0 z-10 border-t border-dashed border-tinta/45"
+              style={{
+                bottom: alto(promedio),
+                right: `calc((100% + 3px) * ${faltan / dias.length})`
+              }}
+            />
+            {dias.map((d, i) => {
+              if (d.dia > hasta) return <div key={d.dia} className="min-w-0 flex-1" />
+              // La etiqueta se ancla al borde en las primeras y últimas barras
+              // para que no se salga del panel.
+              const ancla =
+                i < 4 ? 'left-0' : i > dias.length - 5 ? 'right-0' : 'left-1/2 -translate-x-1/2'
+              return (
+                <div
+                  key={d.dia}
+                  className="group relative flex h-full min-w-0 flex-1 flex-col justify-end rounded-t-[3px]
+                             transition-colors duration-rapido hover:bg-lienzo"
+                >
+                  {d.transferencia > 0 && (
+                    <div
+                      className="w-full rounded-t-[3px] bg-azul-200"
+                      style={{ height: alto(d.transferencia) }}
+                    />
+                  )}
+                  {d.efectivo > 0 && (
+                    <div
+                      className={`w-full bg-azul ${d.transferencia > 0 ? '' : 'rounded-t-[3px]'}`}
+                      style={{ height: alto(d.efectivo) }}
+                    />
+                  )}
+                  <span
+                    role="tooltip"
+                    className={`pointer-events-none absolute bottom-full ${ancla} z-20 mb-1
+                               whitespace-nowrap rounded-md bg-tinta px-2 py-1 text-micro text-blanco
+                               opacity-0 shadow-lg transition-opacity duration-rapido
+                               group-hover:opacity-100 num`}
+                  >
+                    <b className="font-medium">
+                      {diaSemana(d.dia)} · {cop(d.total)}
+                    </b>
+                    <span className="block text-humo">
+                      Efectivo {cop(d.efectivo)} · Transferencia {cop(d.transferencia)}
+                    </span>
+                  </span>
+                </div>
+              )
+            })}
+          </div>
+
+          <div className="mt-1.5 flex gap-[3px]">
+            {dias.map((d) => (
+              <span
+                key={d.dia}
+                className={`min-w-0 flex-1 text-center text-micro num
+                  ${d.dia === hasta ? 'font-semibold text-tinta' : 'text-niebla'}`}
+              >
+                {Number(d.dia.slice(8))}
+              </span>
+            ))}
+          </div>
+        </div>
       </div>
     </div>
   )
@@ -146,13 +246,29 @@ export default function PanelVentas({ onAviso }) {
 
       <section className="panel overflow-hidden">
         <div className="flex items-center justify-between gap-3 px-4 pt-3.5 pb-3">
-          <h3 className="panel-titulo">Ventas por día del mes</h3>
-          <button type="button" onClick={cargar} className="btn-fantasma text-mini py-1.5 px-2.5">
+          <div className="min-w-0">
+            <h3 className="panel-titulo">Ventas por día del mes</h3>
+            <p className="mt-1 flex flex-wrap items-center gap-x-3.5 gap-y-1 text-micro text-grafito">
+              <span className="flex items-center gap-1.5">
+                <span className="h-2.5 w-2.5 rounded-sm bg-azul" />
+                Efectivo
+              </span>
+              <span className="flex items-center gap-1.5">
+                <span className="h-2.5 w-2.5 rounded-sm bg-azul-200" />
+                Transferencia
+              </span>
+              <span className="flex items-center gap-1.5 num">
+                <span className="w-3.5 border-t border-dashed border-tinta/45" />
+                Promedio {cop(promedioDiario(datos?.mes))} por día
+              </span>
+            </p>
+          </div>
+          <button type="button" onClick={cargar} className="btn-fantasma text-mini py-1.5 px-2.5 shrink-0">
             <Icono nombre="refrescar" tam={14} />
             Actualizar
           </button>
         </div>
-        <Tendencia serie={datos?.serieMes} />
+        <Tendencia serie={datos?.serieMes} desde={datos?.mes?.desde} hasta={datos?.mes?.hasta} />
       </section>
 
       <p className="text-micro text-niebla px-1">

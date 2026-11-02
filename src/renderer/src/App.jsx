@@ -8,17 +8,22 @@ import Panel from './views/Panel.jsx'
 import NuevaEntrada from './views/NuevaEntrada.jsx'
 import Salida from './views/Salida.jsx'
 import Vehiculos from './views/Vehiculos.jsx'
+import Lavadero from './views/Lavadero.jsx'
 import Configuracion from './views/Configuracion.jsx'
-import { celda as fmtCelda, cop, normalizarPlaca } from './lib/format.js'
+import { celda as fmtCelda, cop, idDeCodigoLavado, normalizarPlaca } from './lib/format.js'
 
 const TITULOS = {
   panel: 'Panel',
   entrada: 'Nueva entrada',
   salida: 'Registrar salida',
   vehiculos: 'Vehículos',
+  lavadero: 'Lavadero',
   metricas: 'Métricas y caja',
   ajustes: 'Configuración'
 }
+
+/** Misma configuración campo por campo (el panel trae un objeto nuevo en cada refresco). */
+const mismosAjustes = (a, b) => Boolean(a) && Object.keys(b).every((k) => a[k] === b[k])
 
 export default function App() {
   const { stats, celdas, sinCelda, ultimos, settings, error, refrescar } = useDashboard(5000)
@@ -27,47 +32,72 @@ export default function App() {
 
   const [vista, setVista] = useState('panel')
   const [placaEnFoco, setPlacaEnFoco] = useState(null)
+  const [seccionAjustes, setSeccionAjustes] = useState('tarifas')
   const [aviso, setAviso] = useState(null)
   const [ajustes, setAjustes] = useState(null)
 
   const cerrarAviso = useCallback(() => setAviso(null), [])
 
+  // Sólo se reemplaza si cambió algo: las vistas que la editan no deben
+  // reiniciarse con cada refresco del panel.
   useEffect(() => {
-    if (settings) setAjustes(settings)
+    if (settings) setAjustes((previos) => (mismosAjustes(previos, settings) ? previos : settings))
   }, [settings])
 
-  /** Navega a una vista; `placa` la precarga cuando la vista la acepta. */
-  const ir = useCallback((destino, placa = null) => {
-    setPlacaEnFoco(placa)
+  /**
+   * Navega a una vista. `dato` es la placa que la vista precarga, o la sección
+   * que abre la configuración.
+   */
+  const ir = useCallback((destino, dato = null) => {
+    if (destino === 'ajustes') {
+      setSeccionAjustes(dato || 'tarifas')
+      setPlacaEnFoco(null)
+    } else {
+      setPlacaEnFoco(dato)
+    }
     setVista(destino)
   }, [])
 
   const abrirSalida = useCallback((placa) => ir('salida', placa), [ir])
 
   /*
-   * Lectura del escáner. Decide a dónde llevar al operario:
-   * si la moto está adentro, a cobrarle; si no, a su ficha.
+   * Lectura del escáner. Decide a dónde llevar al operario: un tiquete de
+   * lavadero, a entregar esa lavada; una placa que está en el parqueadero, a
+   * cobrarle; una que sólo está en el lavadero, a entregarla; si no, a su ficha.
    */
   const alEscanear = useCallback(
     async (codigo) => {
+      const idLavado = idDeCodigoLavado(codigo)
+      if (idLavado) {
+        const res = await window.api.lavadero.obtener(idLavado)
+        const lavado = res.ok ? res.data : null
+        if (lavado?.estado === 'activo') ir('lavadero', lavado.placa)
+        else
+          setAviso({
+            tipo: 'error',
+            texto: lavado ? `La lavada de ${lavado.placa} ya se entregó` : 'Tiquete de lavadero desconocido'
+          })
+        return
+      }
+
       const placa = normalizarPlaca(codigo)
       if (placa.length < 3) return
 
       const res = await window.api.vehiculos.buscar(placa)
-      const adentro = res.ok && res.data.some((v) => v.placa === placa)
+      if (res.ok && res.data.some((v) => v.placa === placa)) return ir('salida', placa)
 
-      if (adentro) ir('salida', placa)
-      else {
-        ir('vehiculos', placa)
-        setAviso({ tipo: 'ok', texto: `${placa} no está adentro`, detalle: 'Se abrió su ficha' })
-      }
+      const enLavadero = await window.api.lavadero.buscar(placa)
+      if (enLavadero.ok && enLavadero.data.some((l) => l.placa === placa)) return ir('lavadero', placa)
+
+      ir('vehiculos', placa)
+      setAviso({ tipo: 'ok', texto: `${placa} no está adentro`, detalle: 'Se abrió su ficha' })
     },
     [ir]
   )
 
   const { leyendo } = useEscaner({ activo: true, onLectura: alEscanear })
 
-  // Atajos de teclado: F1-F4 navegan, F8 configuración.
+  // Atajos de teclado: F1-F6 navegan (ver VISTAS en Rail.jsx), F8 configuración.
   useEffect(() => {
     const alTeclear = (e) => {
       const atajo = VISTAS.find((v) => v.tecla === e.key)
@@ -177,16 +207,20 @@ export default function App() {
               placaInicial={placaEnFoco}
               ahora={ahora}
               onAviso={setAviso}
-              onLiquidado={({ vehicle, cobro }) => {
+              onLiquidado={({ vehicle, transaccion }) => {
                 setAviso({
                   tipo: 'ok',
                   texto: `${vehicle.placa} salió · ${
-                    cobro.tipoTarifa === 'mensualidad' ? 'mensualidad' : cop(cobro.total)
+                    transaccion ? cop(transaccion.monto) : 'mensualidad'
                   }`
                 })
                 refrescar()
               }}
             />
+          )}
+
+          {vista === 'lavadero' && (
+            <Lavadero placaInicial={placaEnFoco} ahora={ahora} onIr={ir} onAviso={setAviso} />
           )}
 
           {vista === 'vehiculos' && (
@@ -203,7 +237,7 @@ export default function App() {
           {(vista === 'metricas' || vista === 'ajustes') && (
             <Configuracion
               settings={ajustes}
-              seccionInicial={vista === 'metricas' ? 'ventas' : 'tarifas'}
+              seccionInicial={vista === 'metricas' ? 'ventas' : seccionAjustes}
               onGuardado={(nuevo) => {
                 setAjustes(nuevo)
                 refrescar()

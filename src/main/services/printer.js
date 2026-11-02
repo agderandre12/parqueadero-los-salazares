@@ -9,6 +9,9 @@
  * `printer:`), que se imprime por `colaWindows.js`, o una dirección de red
  * `tcp://IP`, que maneja la librería.
  *
+ * Papeles: tiquete de entrada y recibo del parqueadero, tiquete de ingreso y
+ * recibo de entrega del lavadero, y la página de prueba.
+ *
  * Ninguna función `imprimir*` lanza: un fallo de impresora nunca puede tumbar
  * un cobro que ya se registró en la base de datos. Todo devuelve { ok, motivo }.
  * El armado del papel (`componer*`) está separado del envío para poder
@@ -54,6 +57,13 @@ const pesos = (valor) =>
   '$' + Number(valor || 0).toLocaleString('es-CO', { maximumFractionDigits: 0 })
 
 const recibo = (id) => String(id).padStart(6, '0')
+
+/**
+ * Lo que lleva el código de barras del tiquete de lavadero. Con la placa sola
+ * el lector llevaría al operario a buscar la moto en el parqueadero; nueve
+ * caracteres no los tiene ninguna placa, así que no se confunden.
+ */
+export const codigoLavado = (id) => `LAV${recibo(id)}`
 
 const anchoLinea = (settings) => Number(settings.impresora_ancho) || 32
 
@@ -124,6 +134,41 @@ async function abrirImpresora(settings, interfaz) {
 /** 'Etiqueta:        valor' a todo el ancho; el valor se recorta si no cabe. */
 function fila(printer, ancho, etiqueta, valor) {
   printer.leftRight(etiqueta, String(valor).slice(0, Math.max(1, ancho - etiqueta.length - 1)))
+}
+
+/** 'Concepto      $10.000': al revés que `fila`, el que se recorta es el concepto. */
+function renglonCobro(printer, ancho, concepto, monto) {
+  const valor = pesos(monto)
+  printer.leftRight(String(concepto).slice(0, Math.max(1, ancho - valor.length - 1)), valor)
+}
+
+/** Descuento o recargo acordado con el cliente al cobrar; nada si no hubo. */
+function renglonAjuste(printer, ajuste) {
+  const valor = Number(ajuste) || 0
+  if (valor === 0) return
+  printer.leftRight(
+    valor < 0 ? 'Descuento acordado' : 'Ajuste acordado',
+    `${valor < 0 ? '-' : '+'}${pesos(Math.abs(valor))}`
+  )
+}
+
+/** El total a doble tamaño, armado a mano: `leftRight` lo partiría en dos renglones. */
+function renglonGrande(printer, ancho, etiqueta, monto) {
+  const valor = pesos(monto)
+  printer.setTextSize(1, 1)
+  printer.println(etiqueta.padEnd(Math.max(6, Math.floor(ancho / 2) - valor.length)) + valor)
+  printer.setTextSize(0, 0)
+}
+
+/** Pie común de los recibos. */
+function pieRecibo(printer, settings, retirar) {
+  const ancho = anchoLinea(settings)
+  printer.newLine()
+  printer.alignCenter()
+  for (const linea of plegar(settings.mensaje_recibo, ancho)) printer.println(linea)
+  printer.println('-'.repeat(Math.min(ancho, 32)))
+  printer.println('Conserve este recibo')
+  printer.println(retirar)
 }
 
 /** Rótulo centrado entre caracteres de relleno: '***** POLÍTICAS *****'. */
@@ -233,6 +278,7 @@ function cortar(printer) {
 /**
  * Tiquete de entrada. El código de barras es la placa: es lo que identifica al
  * vehículo y funciona aunque el cliente pierda el papel y la dicte de memoria.
+ * El casco en custodia no se imprime: es un control interno del parqueadero.
  */
 export function componerTiquete(printer, { settings, vehicle }) {
   const ancho = anchoLinea(settings)
@@ -256,7 +302,6 @@ export function componerTiquete(printer, { settings, vehicle }) {
   if (vehicle.celda) fila(printer, ancho, 'Celda:', String(vehicle.celda).padStart(2, '0'))
   fila(printer, ancho, 'Tarifa:', ETIQUETA_TARIFA[vehicle.tipo_tarifa] || vehicle.tipo_tarifa)
   fila(printer, ancho, 'Vehículo:', ['Moto', vehicle.marca, vehicle.color].filter(Boolean).join(' '))
-  if (vehicle.casco) fila(printer, ancho, 'Casco:', 'En custodia')
   printer.drawLine()
 
   politicas(printer, settings)
@@ -317,39 +362,118 @@ export function componerRecibo(printer, { settings, vehicle, cobro, transaccion,
   if (vehicle.marca || vehicle.color) {
     fila(printer, ancho, 'Vehículo:', [vehicle.marca, vehicle.color].filter(Boolean).join(' '))
   }
-  if (vehicle.casco) fila(printer, ancho, 'Casco:', 'En custodia')
 
   printer.drawLine()
 
   // ---- Cobro ----
-  printer.leftRight(esMensualidad ? 'Mensualidad' : cobro.detalle || 'Servicio', pesos(cobro.montoBase))
+  renglonCobro(printer, ancho, esMensualidad ? 'Mensualidad' : cobro.detalle || 'Servicio', cobro.montoBase)
   if (cobro.recargo > 0) {
     printer.leftRight('Recargo tiquete perdido', pesos(cobro.recargo))
   }
+  renglonAjuste(printer, transaccion.ajuste)
 
   printer.drawLine()
   printer.bold(true)
-  // A doble ancho la línea tiene la mitad de caracteres: `leftRight` no lo
-  // sabe y partiría el total en dos renglones.
-  const total = pesos(cobro.total)
-  printer.setTextSize(1, 1)
-  printer.println('TOTAL'.padEnd(Math.max(6, Math.floor(ancho / 2) - total.length)) + total)
-  printer.setTextSize(0, 0)
-  if (!esMensualidad) {
-    printer.leftRight(
-      'Pago:',
-      ETIQUETA_METODO[transaccion.metodo_pago] || String(transaccion.metodo_pago || '').toUpperCase()
-    )
-  }
+  // Lo cobrado de verdad: si hubo un valor acordado, difiere del calculado.
+  renglonGrande(printer, ancho, 'TOTAL', transaccion.monto ?? cobro.total)
+  if (!esMensualidad) pago(printer, transaccion.metodo_pago)
   printer.bold(false)
 
-  // ---- Pie ----
-  printer.newLine()
+  pieRecibo(printer, settings, 'para reclamar su vehículo')
+
+  cortar(printer)
+}
+
+/** 'Pago:   EFECTIVO' */
+function pago(printer, metodo) {
+  printer.leftRight('Pago:', ETIQUETA_METODO[metodo] || String(metodo || '').toUpperCase())
+}
+
+/**
+ * Tiquete de ingreso al lavadero: la lavada y el valor que se le dijo al
+ * cliente, y un código de barras propio (`codigoLavado`) para entregarla de un
+ * escaneo. Como el del parqueadero, no menciona el casco.
+ */
+export function componerTiqueteLavado(printer, { settings, lavado }) {
+  const ancho = anchoLinea(settings)
+
+  encabezado(printer, settings)
+
   printer.alignCenter()
-  for (const linea of plegar(settings.mensaje_recibo, ancho)) printer.println(linea)
-  printer.println('-'.repeat(Math.min(ancho, 32)))
-  printer.println('Conserve este recibo')
-  printer.println('para reclamar su vehículo')
+  printer.bold(true)
+  printer.println('TIQUETE DE LAVADERO')
+  printer.setTextSize(2, 2)
+  printer.println(lavado.placa)
+  printer.setTextSize(0, 0)
+  printer.bold(false)
+
+  codigoDeBarras(printer, settings, codigoLavado(lavado.id))
+
+  printer.alignLeft()
+  printer.bold(true)
+  fila(printer, ancho, 'Entrada:', fechaLegible(lavado.hora_entrada))
+  printer.bold(false)
+  fila(printer, ancho, 'Servicio No.:', recibo(lavado.id))
+  fila(printer, ancho, 'Lavada:', lavado.tipo_lavada)
+  fila(printer, ancho, 'Vehículo:', ['Moto', lavado.marca, lavado.color].filter(Boolean).join(' '))
+  printer.drawLine()
+
+  printer.bold(true)
+  renglonGrande(printer, ancho, 'VALOR', lavado.precio)
+  printer.bold(false)
+  printer.drawLine()
+
+  printer.alignCenter()
+  printer.bold(true)
+  printer.println('Presente este tiquete')
+  printer.println('para retirar su moto')
+  printer.bold(false)
+
+  cortar(printer)
+}
+
+/** Recibo de la entrega de una lavada, con lo cobrado y el método de pago. */
+export function componerReciboLavado(printer, { settings, lavado, copia = false }) {
+  const ancho = anchoLinea(settings)
+
+  encabezado(printer, settings, { nit: true })
+
+  printer.alignCenter()
+  if (copia) {
+    printer.bold(true)
+    printer.println('** COPIA **')
+    printer.bold(false)
+  }
+
+  // Numeración propia del lavadero: el "RECIBO No." es la del parqueadero.
+  printer.println(`RECIBO LAVADERO No. ${recibo(lavado.id)}`)
+  printer.setTextSize(1, 1)
+  printer.bold(true)
+  printer.println(lavado.placa)
+  printer.bold(false)
+  printer.setTextSize(0, 0)
+  printer.drawLine()
+
+  printer.alignLeft()
+  fila(printer, ancho, 'Entrada:', fechaLegible(lavado.hora_entrada))
+  printer.bold(true)
+  fila(printer, ancho, 'Entrega:', fechaLegible(lavado.hora_entrega))
+  printer.bold(false)
+  if (lavado.marca || lavado.color) {
+    fila(printer, ancho, 'Vehículo:', [lavado.marca, lavado.color].filter(Boolean).join(' '))
+  }
+  printer.drawLine()
+
+  renglonCobro(printer, ancho, lavado.tipo_lavada, lavado.precio)
+  renglonAjuste(printer, lavado.ajuste)
+
+  printer.drawLine()
+  printer.bold(true)
+  renglonGrande(printer, ancho, 'TOTAL', lavado.monto ?? lavado.precio)
+  pago(printer, lavado.metodo_pago)
+  printer.bold(false)
+
+  pieRecibo(printer, settings, 'para reclamar su moto')
 
   cortar(printer)
 }
@@ -400,6 +524,23 @@ export async function generarBytes(settings, componer) {
   const printer = await abrirImpresora(settings, enMemoria)
   componer(printer)
   return printer.getBuffer()
+}
+
+/**
+ * Si el recibo de un cobro sale o no. Manda el botón que usó el operario
+ * (`imprimir`: "Cobrar e imprimir" o "Cobrar sin imprimir"); sin esa decisión
+ * explícita rige la impresión automática de la configuración.
+ */
+export function debeImprimir(imprimir, settings) {
+  return typeof imprimir === 'boolean' ? imprimir : Boolean(Number(settings.imprimir_automatico))
+}
+
+/** Lo que se informa cuando el recibo no se intentó imprimir. */
+export function sinImprimir(imprimir) {
+  return {
+    ok: false,
+    motivo: imprimir === false ? 'Cobrado sin imprimir' : 'Impresión automática desactivada'
+  }
 }
 
 /** Arma el papel y lo envía. Nunca lanza. */
@@ -454,6 +595,16 @@ export function imprimirRecibo(params) {
 /** Imprime el tiquete de entrada con el código de barras de la placa. */
 export function imprimirTiquete(params) {
   return enviar(params.settings, (printer) => componerTiquete(printer, params))
+}
+
+/** Tiquete de ingreso al lavadero. */
+export function imprimirTiqueteLavado(params) {
+  return enviar(params.settings, (printer) => componerTiqueteLavado(printer, params))
+}
+
+/** Recibo de la entrega de una lavada (con `copia: true`, la reimpresión). */
+export function imprimirReciboLavado(params) {
+  return enviar(params.settings, (printer) => componerReciboLavado(printer, params))
 }
 
 /** Prueba de impresión desde la vista de Configuración. */

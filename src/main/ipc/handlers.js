@@ -1,9 +1,13 @@
 import { ipcMain } from 'electron'
-import { getSettings, updateSettings } from '../db/settingsRepo.js'
+import { getSettings } from '../db/settingsRepo.js'
 import * as vehiculos from '../db/vehiclesRepo.js'
 import * as transacciones from '../db/transactionsRepo.js'
+import * as lavaderoRepo from '../db/lavaderoRepo.js'
 import { cotizar, liquidar } from '../services/liquidacion.js'
 import { registrarEntrada } from '../services/entrada.js'
+import { actualizarConfiguracion } from '../services/configuracion.js'
+import { simularTarifaHora } from '../services/pricing.js'
+import * as lavadero from '../services/lavadero.js'
 import {
   resumenCaja,
   abrirCaja,
@@ -15,10 +19,13 @@ import {
 import {
   imprimirRecibo,
   imprimirTiquete,
+  imprimirTiqueteLavado,
+  imprimirReciboLavado,
   imprimirPrueba,
   estadoImpresora,
   listarImpresoras
 } from '../services/printer.js'
+import { hoySql } from '../services/tiempo.js'
 
 /** Envuelve un handler para que el renderer reciba siempre {ok, data|error}. */
 const manejar = (canal, fn) => {
@@ -35,7 +42,11 @@ const manejar = (canal, fn) => {
 export function registrarHandlers() {
   // ---------------- Configuración ----------------
   manejar('settings:get', () => getSettings())
-  manejar('settings:update', (patch) => updateSettings(patch))
+  manejar('settings:update', (patch) => actualizarConfiguracion(patch))
+
+  // Lo que pagaría una moto por hora con los precios que están en pantalla,
+  // antes de guardarlos. Lanza con el mismo mensaje que al guardar.
+  manejar('precios:simular', (borrador = {}) => simularTarifaHora({ ...getSettings(), ...borrador }))
 
   // ---------------- Dashboard --------------------
   manejar('dashboard:resumen', () => ({
@@ -77,8 +88,26 @@ export function registrarHandlers() {
   // Consulta el valor a cobrar (modal de liquidación y de ticket perdido)
   manejar('vehicles:cotizar', (params) => cotizar(params))
 
-  // Cierra la salida, cobra e intenta imprimir
+  // Cierra la salida, cobra (con el valor acordado, si lo hay) e imprime según
+  // el botón que se usó.
   manejar('vehicles:liquidar', (params) => liquidar(params))
+
+  // ---------------- Lavadero ---------------------
+  manejar('lavadero:tipos', (incluirRetirados = false) =>
+    lavaderoRepo.listarTipos({ incluirRetirados })
+  )
+  manejar('lavadero:guardarTipo', (datos) => lavadero.guardarTipo(datos))
+  manejar('lavadero:retirarTipo', (id) => lavadero.retirarTipo(id))
+
+  manejar('lavadero:activos', () => lavaderoRepo.listarLavadosActivos())
+  manejar('lavadero:buscar', (texto) => lavaderoRepo.buscarLavadosActivos(texto))
+  manejar('lavadero:obtener', (id) => lavaderoRepo.obtenerLavado(id) ?? null)
+  manejar('lavadero:entregadosHoy', () => lavaderoRepo.lavadosEntregadosDelDia(hoySql()))
+
+  // Sólo guarda; el tiquete se pide aparte (`printer:tiqueteLavado`) si el
+  // operario dice que sí.
+  manejar('lavadero:ingresar', (datos) => lavadero.ingresarLavado(datos))
+  manejar('lavadero:entregar', (params) => lavadero.entregarLavado(params))
 
   // ---------------- Transacciones ----------------
   manejar('transactions:hoy', (fecha = null) => transacciones.transaccionesDelDia(fecha))
@@ -105,6 +134,11 @@ export function registrarHandlers() {
     return imprimirTiquete({ settings: getSettings(), vehicle })
   })
 
+  /*
+   * `copia` imprime el sello ** COPIA ** cuando el original ya salió una vez:
+   * el recibo no debe poder usarse dos veces como comprobante. Si se cobró sin
+   * imprimir, el primer papel que sale es el original y queda marcado.
+   */
   manejar('printer:reimprimir', async (transaccionId) => {
     const transaccion = transacciones.obtenerPorId(transaccionId)
     if (!transaccion) throw new Error('Transacción no encontrada')
@@ -118,8 +152,27 @@ export function registrarHandlers() {
       tipoTarifa: transaccion.tipo_tarifa,
       detalle: 'Servicio de parqueadero'
     }
-    // `copia` imprime el sello ** COPIA **: el original ya salió una vez y el
-    // recibo no debe poder usarse dos veces como comprobante.
-    return imprimirRecibo({ settings: getSettings(), vehicle, cobro, transaccion, copia: true })
+    const copia = Boolean(transaccion.impreso)
+    const impresion = await imprimirRecibo({ settings: getSettings(), vehicle, cobro, transaccion, copia })
+    if (impresion.ok && !copia) transacciones.marcarImpreso(transaccion.id, true)
+    return impresion
+  })
+
+  manejar('printer:tiqueteLavado', (lavadoId) => {
+    const lavado = lavaderoRepo.obtenerLavado(lavadoId)
+    if (!lavado) throw new Error('Lavada no encontrada')
+    return imprimirTiqueteLavado({ settings: getSettings(), lavado })
+  })
+
+  // Mismo criterio que `printer:reimprimir`.
+  manejar('printer:reciboLavado', async (lavadoId) => {
+    const lavado = lavaderoRepo.obtenerLavado(lavadoId)
+    if (!lavado) throw new Error('Lavada no encontrada')
+    if (lavado.estado !== 'entregado') throw new Error('La lavada todavía no se ha cobrado')
+
+    const copia = Boolean(lavado.impreso)
+    const impresion = await imprimirReciboLavado({ settings: getSettings(), lavado, copia })
+    if (impresion.ok && !copia) lavaderoRepo.marcarLavadoImpreso(lavado.id, true)
+    return impresion
   })
 }

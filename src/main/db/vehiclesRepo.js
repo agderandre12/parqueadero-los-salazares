@@ -3,6 +3,9 @@ import { ahoraSql } from '../services/tiempo.js'
 
 const normalizarPlaca = (p) => String(p || '').toUpperCase().replace(/[\s-]/g, '').trim()
 
+/** Número o letra del locker donde quedó el casco; opcional, máximo 10 caracteres. */
+const normalizarLocker = (l) => String(l ?? '').trim().toUpperCase().slice(0, 10)
+
 /** Registra una entrada. Devuelve el vehículo creado. */
 export function crearEntrada(datos) {
   const db = getDb()
@@ -19,15 +22,16 @@ export function crearEntrada(datos) {
   const info = db
     .prepare(
       `INSERT INTO vehicles
-         (placa, marca, color, casco, celda, hora_entrada, tipo_tarifa, tarifa_personalizada, estado, observaciones)
+         (placa, marca, color, casco, locker, celda, hora_entrada, tipo_tarifa, tarifa_personalizada, estado, observaciones)
        VALUES
-         (@placa, @marca, @color, @casco, @celda, @hora_entrada, @tipo_tarifa, @tarifa_personalizada, 'activo', @observaciones)`
+         (@placa, @marca, @color, @casco, @locker, @celda, @hora_entrada, @tipo_tarifa, @tarifa_personalizada, 'activo', @observaciones)`
     )
     .run({
       placa,
       marca: datos.marca || '',
       color: datos.color || '',
       casco: datos.casco ? 1 : 0,
+      locker: datos.casco ? normalizarLocker(datos.locker) : '',
       celda: celda ?? null,
       hora_entrada: datos.hora_entrada || ahoraSql(),
       tipo_tarifa: datos.tipo_tarifa || 'hora',
@@ -118,7 +122,7 @@ export function estadisticasHoy() {
 
   const recaudoHoy = db
     .prepare(
-      `SELECT COALESCE(SUM(monto), 0) AS total FROM transactions
+      `SELECT COALESCE(SUM(monto), 0) AS total FROM ventas
         WHERE date(fecha) = date('now','localtime')`
     )
     .get().total
@@ -181,7 +185,10 @@ export function historial({
     .all(...params, limite, offset)
 }
 
-/** Historial acumulado de una placa: cuántas veces vino y cuánto ha dejado. */
+/**
+ * Historial acumulado de una placa: cuántas veces vino al parqueadero y cuánto
+ * ha dejado entre parqueadero y lavadero.
+ */
 export function resumenPlaca(placa) {
   const db = getDb()
   const p = normalizarPlaca(placa)
@@ -191,7 +198,7 @@ export function resumenPlaca(placa) {
     .get(p)
 
   const cobrado = db
-    .prepare('SELECT COALESCE(SUM(monto), 0) AS total FROM transactions WHERE placa = ?')
+    .prepare('SELECT COALESCE(SUM(monto), 0) AS total FROM ventas WHERE placa = ?')
     .get(p)
 
   return {
@@ -226,4 +233,4 @@ export function mapaCeldas() {
   return { celdas, sinCelda }
 }
 
-export { normalizarPlaca }
+export { normalizarPlaca, normalizarLocker }

@@ -46,6 +46,20 @@ const TRAZOS = {
     </>
   ),
   mas: <path d="M12 5v14M5 12h14" />,
+  editar: (
+    <>
+      <path d="M4 20h4L18.6 9.4a2.1 2.1 0 0 0-3-3L5 17v3Z" />
+      <path d="m13.5 8.5 3 3" />
+    </>
+  ),
+  eliminar: (
+    <>
+      <path d="M4.5 7h15" />
+      <path d="M9 7V4.5h6V7" />
+      <path d="m6.5 7 .9 12.1A1.5 1.5 0 0 0 8.9 20.5h6.2a1.5 1.5 0 0 0 1.5-1.4L17.5 7" />
+      <path d="M10 11v5.5M14 11v5.5" />
+    </>
+  ),
   buscar: (
     <>
       <circle cx="11" cy="11" r="7" />

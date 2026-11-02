@@ -1,12 +1,9 @@
 import { useEffect, useRef, useState } from 'react'
+import CampoPesos from '../components/CampoPesos.jsx'
+import CascoCustodia from '../components/CascoCustodia.jsx'
 import Icono from '../components/Icono.jsx'
-import {
-  celda as fmtCelda,
-  cop,
-  normalizarPlaca,
-  ETIQUETA_TARIFA,
-  METODOS_PAGO
-} from '../lib/format.js'
+import MetodoPago from '../components/MetodoPago.jsx'
+import { celda as fmtCelda, cop, normalizarPlaca, ETIQUETA_TARIFA } from '../lib/format.js'
 
 // `metodoPago` sin valor por defecto, como en la salida: decide si el dinero
 // entra a la caja, así que el operario lo escoge siempre.
@@ -15,6 +12,7 @@ const INICIAL = {
   marca: '',
   color: '',
   casco: false,
+  locker: '',
   tipo_tarifa: 'hora',
   tarifa_personalizada: '',
   metodoPago: null
@@ -163,33 +161,12 @@ export default function NuevaEntrada({ settings, celdaSugerida, hayCupo, onRegis
           </fieldset>
 
           {esMensualidad && (
-            <fieldset className="mt-4" disabled={guardando}>
-              <legend className="etiqueta">Método de pago</legend>
-              <div className="grid grid-cols-2 gap-1.5">
-                {METODOS_PAGO.map((m) => {
-                  const activo = form.metodoPago === m.id
-                  return (
-                    <button
-                      key={m.id}
-                      type="button"
-                      aria-pressed={activo}
-                      onClick={() => setForm((f) => ({ ...f, metodoPago: m.id }))}
-                      className={`flex flex-col items-center gap-1 rounded-campo border px-2 py-3
-                        transition-colors duration-rapido ease-salida
-                        ${
-                          activo
-                            ? 'border-azul bg-azul-50 text-azul-700'
-                            : 'border-linea-fuerte text-grafito hover:border-niebla hover:bg-lienzo'
-                        }`}
-                    >
-                      <Icono nombre={m.icono} tam={19} />
-                      <span className="text-base font-medium">{m.etiqueta}</span>
-                      <span className="text-micro text-niebla">{m.ayuda}</span>
-                    </button>
-                  )
-                })}
-              </div>
-            </fieldset>
+            <MetodoPago
+              className="mt-4"
+              valor={form.metodoPago}
+              disabled={guardando}
+              onChange={(metodoPago) => setForm((f) => ({ ...f, metodoPago }))}
+            />
           )}
 
           {form.tipo_tarifa === 'personalizada' && (
@@ -197,15 +174,13 @@ export default function NuevaEntrada({ settings, celdaSugerida, hayCupo, onRegis
               <label className="etiqueta" htmlFor="valor">
                 Valor pactado
               </label>
-              <input
+              <CampoPesos
                 id="valor"
-                type="number"
-                min="0"
-                step="500"
-                value={form.tarifa_personalizada}
-                onChange={set('tarifa_personalizada')}
-                placeholder="5000"
-                className="campo num"
+                valor={form.tarifa_personalizada}
+                onChange={(tarifa_personalizada) =>
+                  setForm((f) => ({ ...f, tarifa_personalizada }))
+                }
+                placeholder="5.000"
               />
             </div>
           )}
@@ -239,22 +214,12 @@ export default function NuevaEntrada({ settings, celdaSugerida, hayCupo, onRegis
             </div>
           </div>
 
-          <label
-            className="mt-4 flex items-center justify-between gap-3 rounded-campo
-                       border border-linea px-3 py-3 cursor-pointer
-                       transition-colors duration-rapido hover:border-linea-fuerte"
-          >
-            <span className="flex items-center gap-2.5 text-base font-medium">
-              <Icono nombre="casco" tam={18} className="text-grafito" />
-              Deja el casco en custodia
-            </span>
-            <input
-              type="checkbox"
-              checked={form.casco}
-              onChange={set('casco')}
-              className="w-4 h-4 rounded"
-            />
-          </label>
+          <CascoCustodia
+            casco={form.casco}
+            locker={form.locker}
+            disabled={guardando}
+            onCambio={(cambio) => setForm((f) => ({ ...f, ...cambio }))}
+          />
 
           {esMensualidad ? (
             <>
@@ -281,7 +246,9 @@ export default function NuevaEntrada({ settings, celdaSugerida, hayCupo, onRegis
                 {guardando ? 'Registrando…' : 'Registrar entrada'}
               </button>
               <p className="mt-2.5 text-center text-micro text-niebla">
-                Enter para guardar · el tiquete con código de barras se imprime solo
+                {settings?.imprimir_automatico
+                  ? 'Enter para guardar · el tiquete con código de barras se imprime solo'
+                  : 'Enter para guardar · la impresión automática del tiquete está apagada'}
               </p>
             </>
           )}

@@ -13,6 +13,7 @@ const CAMPOS_EDITABLES = [
   'cargo_ticket_perdido',
   'minutos_gracia',
   'horas_tope_dia',
+  'tramos_hora',
   'caja_base_predeterminada',
   'impresora_tipo',
   'impresora_interface',

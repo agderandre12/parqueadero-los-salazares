@@ -102,6 +102,16 @@ export const normalizarPlaca = (p) =>
 
 export const celda = (n) => (n ? String(n).padStart(2, '0') : '—')
 
+/**
+ * Número de servicio de un tiquete de lavadero leído por el escáner
+ * ('LAV000123' -> 123), o null si es otra cosa. Espejo de `codigoLavado` en
+ * `src/main/services/printer.js`: si cambia el formato, cambiar ambos.
+ */
+export function idDeCodigoLavado(codigo) {
+  const m = /^LAV(\d{6})$/.exec(String(codigo || '').toUpperCase().replace(/[^A-Z0-9]/g, ''))
+  return m ? Number(m[1]) : null
+}
+
 export const ETIQUETA_TARIFA = {
   hora: 'Por hora',
   amanecida: 'Amanecida',
@@ -123,11 +133,4 @@ export const METODOS_PAGO = [
 export const ETIQUETA_METODO = {
   efectivo: 'Efectivo',
   transferencia: 'Transferencia'
-}
-
-/** '19/08' — eje compacto para la serie diaria de ventas. */
-export function diaCorto(iso) {
-  const d = parseSql(iso)
-  if (!d) return '--'
-  return d.toLocaleDateString('es-CO', { day: '2-digit', month: '2-digit' })
 }

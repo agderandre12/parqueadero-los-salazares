@@ -203,12 +203,22 @@ export default function Vehiculos({ ahora, placaInicial, onSalida, onAviso }) {
               <dl className="mt-5 space-y-2.5 text-base">
                 <Dato termino="Marca" valor={ficha.vehicle.marca || '—'} />
                 <Dato termino="Color" valor={ficha.vehicle.color || '—'} />
-                <Dato termino="Casco" valor={ficha.vehicle.casco ? 'Sí' : 'No'} />
+                <Dato
+                  termino="Casco"
+                  valor={
+                    ficha.vehicle.casco
+                      ? ficha.vehicle.locker
+                        ? `Sí · locker ${ficha.vehicle.locker}`
+                        : 'Sí'
+                      : 'No'
+                  }
+                />
                 <Dato
                   termino="Tarifa"
                   valor={ETIQUETA_TARIFA[ficha.vehicle.tipo_tarifa] || ficha.vehicle.tipo_tarifa}
                 />
                 <Dato termino="Visitas" valor={ficha.resumen.visitas} num />
+                {/* Incluye lo que ha pagado en el lavadero. */}
                 <Dato termino="Cobro acumulado" valor={cop(ficha.resumen.totalCobrado)} num />
                 {ficha.resumen.primeraVisita && (
                   <Dato termino="Cliente desde" valor={fecha(ficha.resumen.primeraVisita)} num />

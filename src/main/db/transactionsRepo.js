@@ -1,12 +1,16 @@
 import { getDb } from './index.js'
 import { ahoraSql } from '../services/tiempo.js'
 
-/** Registra el pago de una liquidación. */
+/**
+ * Registra el pago de una liquidación. `ajuste` es la diferencia entre lo que
+ * se acordó con el cliente y lo calculado (negativo = descuento).
+ */
 export function registrarTransaccion({
   vehicle_id,
   placa,
   monto_base = 0,
   recargo = 0,
+  ajuste = 0,
   minutos = 0,
   tipo_tarifa = 'hora',
   tipo = 'normal',
@@ -18,10 +22,10 @@ export function registrarTransaccion({
   const info = db
     .prepare(
       `INSERT INTO transactions
-         (vehicle_id, placa, monto_base, recargo, monto, minutos, tipo_tarifa, tipo,
+         (vehicle_id, placa, monto_base, recargo, ajuste, monto, minutos, tipo_tarifa, tipo,
           metodo_pago, fecha, impreso)
        VALUES
-         (@vehicle_id, @placa, @monto_base, @recargo, @monto, @minutos, @tipo_tarifa, @tipo,
+         (@vehicle_id, @placa, @monto_base, @recargo, @ajuste, @monto, @minutos, @tipo_tarifa, @tipo,
           @metodo_pago, @fecha, @impreso)`
     )
     .run({
@@ -29,7 +33,8 @@ export function registrarTransaccion({
       placa,
       monto_base,
       recargo,
-      monto: monto_base + recargo,
+      ajuste,
+      monto: monto_base + recargo + ajuste,
       minutos,
       tipo_tarifa,
       tipo,
@@ -78,17 +83,22 @@ export function ultimaDeVehiculo(vehicleId) {
 /**
  * Ventas de un rango de fechas ('YYYY-MM-DD', ambos extremos incluidos),
  * separadas por método de pago. `efectivo` es lo único que toca el cajón.
- * @returns {{operaciones:number, efectivo:number, transferencia:number, total:number}}
+ * Lee la vista `ventas`: incluye lo cobrado en el lavadero, que además se
+ * informa aparte en `lavadero`.
+ * @returns {{operaciones:number, cobrosEfectivo:number, efectivo:number,
+ *            transferencia:number, lavadero:number, total:number}}
  */
 export function totalesEntre(desde, hasta) {
   return getDb()
     .prepare(
       `SELECT
          COUNT(*) AS operaciones,
+         COALESCE(SUM(CASE WHEN metodo_pago = 'efectivo'      THEN 1     ELSE 0 END), 0) AS cobrosEfectivo,
          COALESCE(SUM(CASE WHEN metodo_pago = 'efectivo'      THEN monto ELSE 0 END), 0) AS efectivo,
          COALESCE(SUM(CASE WHEN metodo_pago = 'transferencia' THEN monto ELSE 0 END), 0) AS transferencia,
+         COALESCE(SUM(CASE WHEN origen = 'lavadero'           THEN monto ELSE 0 END), 0) AS lavadero,
          COALESCE(SUM(monto), 0) AS total
-       FROM transactions
+       FROM ventas
        WHERE date(fecha) BETWEEN ? AND ?`
     )
     .get(desde, hasta)
@@ -103,12 +113,19 @@ export function ventasPorDia(desde, hasta) {
          COALESCE(SUM(CASE WHEN metodo_pago = 'efectivo'      THEN monto ELSE 0 END), 0) AS efectivo,
          COALESCE(SUM(CASE WHEN metodo_pago = 'transferencia' THEN monto ELSE 0 END), 0) AS transferencia,
          COALESCE(SUM(monto), 0) AS total
-       FROM transactions
+       FROM ventas
        WHERE date(fecha) BETWEEN ? AND ?
        GROUP BY date(fecha)
        ORDER BY dia ASC`
     )
     .all(desde, hasta)
+}
+
+/** Cobros de un día ('YYYY-MM-DD') del parqueadero y del lavadero, del más reciente. */
+export function ventasDelDia(fecha) {
+  return getDb()
+    .prepare('SELECT * FROM ventas WHERE date(fecha) = ? ORDER BY fecha DESC')
+    .all(fecha)
 }
 
 /**

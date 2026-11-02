@@ -8,6 +8,9 @@ const api = {
     get: () => invocar('settings:get'),
     update: (patch) => invocar('settings:update', patch)
   },
+  precios: {
+    simular: (borrador) => invocar('precios:simular', borrador)
+  },
   dashboard: {
     resumen: () => invocar('dashboard:resumen')
   },
@@ -21,6 +24,17 @@ const api = {
     celdaLibre: () => invocar('vehicles:celdaLibre'),
     cotizar: (params) => invocar('vehicles:cotizar', params),
     liquidar: (params) => invocar('vehicles:liquidar', params)
+  },
+  lavadero: {
+    tipos: (incluirRetirados) => invocar('lavadero:tipos', incluirRetirados),
+    guardarTipo: (datos) => invocar('lavadero:guardarTipo', datos),
+    retirarTipo: (id) => invocar('lavadero:retirarTipo', id),
+    activos: () => invocar('lavadero:activos'),
+    buscar: (texto) => invocar('lavadero:buscar', texto),
+    obtener: (id) => invocar('lavadero:obtener', id),
+    entregadosHoy: () => invocar('lavadero:entregadosHoy'),
+    ingresar: (datos) => invocar('lavadero:ingresar', datos),
+    entregar: (params) => invocar('lavadero:entregar', params)
   },
   transacciones: {
     hoy: (fecha) => invocar('transactions:hoy', fecha),
@@ -41,7 +55,9 @@ const api = {
     prueba: () => invocar('printer:prueba'),
     lista: () => invocar('printer:lista'),
     tiquete: (vehicleId) => invocar('printer:tiquete', vehicleId),
-    reimprimir: (id) => invocar('printer:reimprimir', id)
+    reimprimir: (id) => invocar('printer:reimprimir', id),
+    tiqueteLavado: (lavadoId) => invocar('printer:tiqueteLavado', lavadoId),
+    reciboLavado: (lavadoId) => invocar('printer:reciboLavado', lavadoId)
   }
 }
 
