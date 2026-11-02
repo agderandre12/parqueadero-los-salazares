@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
+import CampoMarca from './CampoMarca.jsx'
 import CampoPesos from './CampoPesos.jsx'
 import CascoCustodia from './CascoCustodia.jsx'
 import Icono from './Icono.jsx'
@@ -184,13 +185,11 @@ export default function IngresoLavado({ tipos, bloqueado, onIngresado, onError, 
             <label className="etiqueta" htmlFor="lavado-marca">
               Marca <span className="text-niebla font-normal">opcional</span>
             </label>
-            <input
+            <CampoMarca
               id="lavado-marca"
-              value={form.marca}
-              onChange={set('marca')}
-              placeholder="Bajaj"
-              autoComplete="off"
-              className="campo"
+              valor={form.marca}
+              disabled={guardando}
+              onChange={(marca) => setForm((f) => ({ ...f, marca }))}
             />
           </div>
           <div>

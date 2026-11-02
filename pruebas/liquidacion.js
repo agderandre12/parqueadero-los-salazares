@@ -47,7 +47,13 @@ import {
   resumenCaja,
   metricasVentas
 } from '../src/main/services/caja.js'
-import { aTextoSql, hoySql } from '../src/main/services/tiempo.js'
+import {
+  avisarCierre,
+  buscarChat,
+  probarTelegram,
+  reintentarAvisos
+} from '../src/main/services/telegram.js'
+import { aTextoSql, desdeTextoSql, hoySql } from '../src/main/services/tiempo.js'
 
 // Base de datos desechable: no toca los datos del parqueadero.
 // Se fija antes de la primera llamada a getDb(), que es quien resuelve la ruta.
@@ -163,7 +169,7 @@ async function correr() {
 
   lanza(() => entradaHace('abc-12d', 1), 'rechaza la misma placa dos veces adentro')
 
-  const stats1 = vehiculos.estadisticasHoy()
+  const stats1 = vehiculos.estadisticasDelDia()
   iguales(stats1.ocupadas, 2, 'ocupadas = 2')
   iguales(stats1.disponibles, settings.total_celdas - 2, 'disponibles descuenta las ocupadas')
   iguales(stats1.entradasHoy, 2, 'entradas de hoy = 2')
@@ -209,7 +215,7 @@ async function correr() {
   const mapa2 = vehiculos.mapaCeldas()
   iguales(mapa2.celdas[0].ocupada, false, 'la celda 01 quedó libre')
 
-  const stats2 = vehiculos.estadisticasHoy()
+  const stats2 = vehiculos.estadisticasDelDia()
   iguales(stats2.ocupadas, 1, 'ocupadas baja a 1')
   iguales(stats2.salidasHoy, 1, 'salidas de hoy = 1')
   iguales(stats2.recaudoHoy, 3 * settings.tarifa_hora, 'el recaudo del día suma el cobro')
@@ -851,7 +857,16 @@ async function correr() {
     'el cobro viejo queda en efectivo y sin ajuste'
   )
   iguales(transacciones.totalesEntre('2025-01-01', '2025-12-31').total, 5400, 'y cuenta en las ventas de su fecha')
-  ok(columnas('caja_dias').includes('queda_en_caja'), 'caja_dias recibe queda_en_caja')
+  ok(
+    ['queda_en_caja', 'aviso_estado'].every((c) => columnas('caja_dias').includes(c)),
+    'caja_dias recibe queda_en_caja y aviso_estado'
+  )
+  ok(
+    ['telegram_activo', 'telegram_token', 'telegram_chat_id'].every((c) =>
+      columnas('settings').includes(c)
+    ),
+    'settings recibe las columnas de Telegram'
+  )
   iguales(
     resumenCaja('2025-03-11').baseInicial,
     5400,
@@ -866,6 +881,8 @@ async function correr() {
   }
 
   await reglasContraCobroReal()
+  await avisosPorTelegram()
+  await mesesDeOperacion()
 }
 
 /** Abre una base nueva y vacía; `fn` corre sobre ella y se borra al terminar. */
@@ -1013,6 +1030,501 @@ async function reglasContraCobroReal() {
     iguales(total(3600), 2000, 'la hora exacta es 1 hora')
     iguales(total(3601), 4000, 'y un segundo más ya es la segunda')
   })
+}
+
+/*
+ * Telegram falso: guarda lo que se le manda y responde lo que diga `respuesta`.
+ * 'sinRed' hace lo que hace fetch sin internet.
+ */
+function telegramFalso() {
+  const fetchReal = globalThis.fetch
+  const falso = {
+    llamadas: [],
+    respuesta: { estado: 200, cuerpo: { ok: true, result: {} } },
+    restaurar: () => {
+      globalThis.fetch = fetchReal
+    }
+  }
+  globalThis.fetch = async (url, opciones) => {
+    falso.llamadas.push({ url, cuerpo: JSON.parse(opciones.body) })
+    if (falso.respuesta === 'sinRed') throw new TypeError('fetch failed')
+    return { status: falso.respuesta.estado, json: async () => falso.respuesta.cuerpo }
+  }
+  return falso
+}
+
+const TOKEN_DE_PRUEBA = '123456:token-de-prueba'
+
+async function avisosPorTelegram() {
+  console.log('\nAviso del cierre por Telegram')
+  const telegram = telegramFalso()
+
+  await enBaseNueva(async () => {
+    const hoy = hoySql()
+    const cerrarHoy = (extra = {}) => {
+      const { esperado } = resumenCaja(hoy)
+      return cerrarCaja({ conteoFinal: esperado, ...extra })
+    }
+
+    await registrarEntrada({ placa: 'TEL001', tipo_tarifa: 'hora' })
+    cerrarHoy()
+    const apagado = await avisarCierre(hoy)
+    ok(apagado.omitido && telegram.llamadas.length === 0, 'apagado no envía nada')
+    iguales(resumenCaja(hoy).avisoEstado, null, 'y el cierre no queda con aviso pendiente')
+    reabrirCaja(hoy)
+
+    lanza(
+      () => actualizarConfiguracion({ telegram_activo: 1 }),
+      'no se activa sin el token y el chat'
+    )
+    actualizarConfiguracion({
+      telegram_activo: 1,
+      telegram_token: `  ${TOKEN_DE_PRUEBA} `,
+      telegram_chat_id: ' 998877 '
+    })
+    iguales(getSettings().telegram_token, TOKEN_DE_PRUEBA, 'el token se guarda sin espacios')
+
+    const conEntrada = entradaHace('TEL002', 3)
+    await liquidar({ vehicleId: conEntrada.id, metodoPago: 'efectivo', totalAcordado: 1000, imprimir: false })
+    cerrarHoy({ conteoFinal: 900, quedaEnCaja: 400, observaciones: 'Pago de <luz> & agua' })
+    const enviado = await avisarCierre(hoy)
+    ok(enviado.ok, 'con Telegram activo se envía el cierre')
+    iguales(resumenCaja(hoy).avisoEstado, 'enviado', 'y queda marcado como enviado')
+
+    const { url, cuerpo } = telegram.llamadas[0]
+    ok(url.endsWith(`/bot${TOKEN_DE_PRUEBA}/sendMessage`), 'va al bot configurado')
+    iguales(cuerpo.chat_id, '998877', 'y al chat del administrador')
+    ok(cuerpo.text.includes('Ventas del día: $1.000'), 'el mensaje trae las ventas del día')
+    ok(cuerpo.text.includes('Efectivo: $1.000'), 'el efectivo')
+    ok(cuerpo.text.includes('Descuentos dados: $'), 'los descuentos')
+    ok(cuerpo.text.includes('Debía haber: $1.000'), 'lo que debía haber')
+    ok(cuerpo.text.includes('Contado: $900'), 'lo contado')
+    ok(cuerpo.text.includes('Faltante: $100'), 'el faltante')
+    ok(cuerpo.text.includes('Se retiró: $500'), 'lo retirado')
+    ok(cuerpo.text.includes('Quedó en el cajón: $400'), 'lo que quedó')
+    ok(cuerpo.text.includes('Entradas: 2 · Salidas: 1'), 'el movimiento del día')
+    ok(cuerpo.text.includes('Motos adentro ahora: 1'), 'las motos que siguen adentro')
+    ok(cuerpo.text.includes('Ventas del mes hasta este día: $1.000'), 'y el acumulado del mes')
+    ok(
+      cuerpo.text.includes('Pago de &lt;luz&gt; &amp; agua'),
+      'las observaciones no pueden romper el formato'
+    )
+
+    reabrirCaja(hoy)
+    iguales(resumenCaja(hoy).avisoEstado, null, 'reabrir borra el aviso')
+
+    telegram.respuesta = 'sinRed'
+    telegram.llamadas.length = 0
+    cerrarHoy()
+    const sinRed = await avisarCierre(hoy)
+    ok(!sinRed.ok && sinRed.motivo.includes('internet'), 'sin internet informa el motivo, sin lanzar')
+    ok(!sinRed.motivo.includes(TOKEN_DE_PRUEBA), 'y el motivo no muestra el token')
+    ok(resumenCaja(hoy).cerrada, 'el cierre no se deshace')
+    iguales(resumenCaja(hoy).avisoEstado, 'pendiente', 'y el aviso queda pendiente')
+
+    await reintentarAvisos()
+    iguales(resumenCaja(hoy).avisoEstado, 'pendiente', 'sigue pendiente mientras no haya internet')
+    telegram.respuesta = { estado: 200, cuerpo: { ok: true, result: {} } }
+    telegram.llamadas.length = 0
+    await reintentarAvisos()
+    iguales(resumenCaja(hoy).avisoEstado, 'enviado', 'con internet el reintento lo envía')
+    iguales(telegram.llamadas.length, 1, 'una sola vez')
+    await reintentarAvisos()
+    iguales(telegram.llamadas.length, 1, 'y no se repite')
+
+    telegram.respuesta = { estado: 401, cuerpo: { ok: false, description: 'Unauthorized' } }
+    ok(
+      (await probarTelegram({ token: 'x', chatId: '1' })).motivo.includes('token'),
+      'un token malo se explica'
+    )
+    telegram.respuesta = {
+      estado: 400,
+      cuerpo: { ok: false, description: 'Bad Request: chat not found' }
+    }
+    ok(
+      (await probarTelegram({ token: 'x', chatId: '1' })).motivo.includes('chat'),
+      'un chat que no existe también'
+    )
+    ok(
+      !(await probarTelegram({ token: '', chatId: '' })).ok,
+      'la prueba sin datos no llama a Telegram y no lanza'
+    )
+
+    telegram.respuesta = {
+      estado: 200,
+      cuerpo: {
+        ok: true,
+        result: [
+          { message: { chat: { id: 1, first_name: 'Otro' } } },
+          { message: { chat: { id: 555, first_name: 'Administrador' } } }
+        ]
+      }
+    }
+    const chat = await buscarChat(TOKEN_DE_PRUEBA)
+    ok(chat.id === '555' && chat.nombre === 'Administrador', 'buscar chat toma al último que escribió')
+    telegram.respuesta = { estado: 200, cuerpo: { ok: true, result: [] } }
+    await lanzaAsync(() => buscarChat(TOKEN_DE_PRUEBA), 'sin mensajes, pide escribirle al bot')
+  })
+
+  telegram.restaurar()
+}
+
+/** Reloj detenido: los cobros y la caja creen que es el día que se está simulando. */
+function relojFalso() {
+  const DateReal = globalThis.Date
+  let instante = DateReal.now()
+  globalThis.Date = class extends DateReal {
+    constructor(...args) {
+      if (args.length) super(...args)
+      else super(instante)
+    }
+    static now() {
+      return instante
+    }
+  }
+  return {
+    a: (texto) => {
+      instante = desdeTextoSql(texto).getTime()
+    },
+    restaurar: () => {
+      globalThis.Date = DateReal
+    }
+  }
+}
+
+// Las fechas del libro se cuentan con UTC, aparte de las cuentas de la aplicación.
+const sumarDias = (fecha, dias) =>
+  new Date(Date.parse(`${fecha}T12:00:00Z`) + dias * 86400000).toISOString().slice(0, 10)
+const lunesDe = (fecha) =>
+  sumarDias(fecha, -((new Date(`${fecha}T12:00:00Z`).getUTCDay() + 6) % 7))
+
+/** Generador con semilla: la simulación es la misma en cada corrida. */
+function azarConSemilla(semilla) {
+  let s = semilla
+  return () => {
+    s = (s + 0x6d2b79f5) | 0
+    let t = Math.imul(s ^ (s >>> 15), 1 | s)
+    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296
+  }
+}
+
+/**
+ * Opera el negocio día por día por el camino real (entradas, salidas, lavadero,
+ * cierres) y cada noche compara lo que dice la aplicación contra un libro
+ * llevado aparte, sin pasar por `ventas` ni por SQLite.
+ */
+async function operarPeriodo(nombre, desde, hasta, semilla) {
+  const reloj = relojFalso()
+  const telegram = telegramFalso()
+  const azar = azarConSemilla(semilla)
+  const entre = (a, b) => a + Math.floor(azar() * (b - a + 1))
+  const uno = (...opciones) => opciones[entre(0, opciones.length - 1)]
+  const errores = []
+  const revisar = (real, esperado, que) => {
+    if (real !== esperado) errores.push(`${que}: app ${real}, libro ${esperado}`)
+  }
+
+  const c = PRECIOS_DE_PRUEBA[0]
+  const BASE_PREDETERMINADA = 50000
+  const { reglas, ...precios } = c
+  reloj.a(`${desde} 06:00:00`)
+  actualizarConfiguracion({
+    ...precios,
+    tarifa_mensualidad: 60000,
+    cargo_ticket_perdido: 2000,
+    caja_base_predeterminada: BASE_PREDETERMINADA,
+    imprimir_automatico: 0,
+    tramos_hora: JSON.stringify(reglas),
+    telegram_activo: 1,
+    telegram_token: TOKEN_DE_PRUEBA,
+    telegram_chat_id: '1'
+  })
+  const lavada = guardarTipo({ nombre: `Completa ${nombre}`, precio: 12000 })
+
+  const libro = []
+  const movimiento = new Map()
+  const contar = (fecha, campo) => {
+    const dia = movimiento.get(fecha) ?? { entradas: 0, salidas: 0 }
+    dia[campo]++
+    movimiento.set(fecha, dia)
+  }
+  const agenda = new Map()
+  const programar = (fecha, hora, fn) => {
+    agenda.set(fecha, [...(agenda.get(fecha) ?? []), { hora, fn }])
+  }
+  const vender = (fecha, monto, metodo, origen, descuento = 0) =>
+    libro.push({ fecha, monto, metodo, origen, descuento })
+
+  const suma = (a, b) => {
+    const ventas = libro.filter((v) => v.fecha >= a && v.fecha <= b)
+    const de = (filtro) => ventas.filter(filtro).reduce((s, v) => s + v.monto, 0)
+    return {
+      operaciones: ventas.length,
+      total: de(() => true),
+      efectivo: de((v) => v.metodo === 'efectivo'),
+      transferencia: de((v) => v.metodo === 'transferencia'),
+      lavadero: de((v) => v.origen === 'lavadero'),
+      descuentos: ventas.reduce((s, v) => s + v.descuento, 0)
+    }
+  }
+
+  let placas = 0
+  let ultimaJornada = null
+  let olvidada = null
+  let jornadasCerradas = 0
+
+  for (let fecha = desde; fecha <= hasta; fecha = sumarDias(fecha, 1)) {
+    const eventos = agenda.get(fecha) ?? []
+    agenda.delete(fecha)
+
+    // Hay días que no se abre: lo que tenía programado pasa al siguiente.
+    if (azar() < 0.1) {
+      for (const e of eventos) programar(sumarDias(fecha, 1), e.hora, e.fn)
+      reloj.a(`${fecha} 21:00:00`)
+      revisarPeriodos(fecha)
+      continue
+    }
+
+    for (let i = 0, n = entre(3, 7); i < n; i++) {
+      const placa = `M${semilla}${++placas}`
+      const minuto = String(entre(0, 59)).padStart(2, '0')
+      const horaEntrada = `${String(entre(7, 18)).padStart(2, '0')}:${minuto}:00`
+      const tipo = uno('hora', 'hora', 'hora', 'hora', 'amanecida', 'personalizada', 'mensualidad')
+      const metodo = uno('efectivo', 'efectivo', 'transferencia')
+
+      // La salida: el mismo día, de madrugada del siguiente o días después.
+      const dias = uno(0, 0, 0, 0, 1, 1, 2, 3)
+      const horaSalida =
+        dias === 0
+          ? `${String(entre(Number(horaEntrada.slice(0, 2)) + 1, 20)).padStart(2, '0')}:${minuto}:30`
+          : uno('00:30:00', '08:15:00', '19:45:10')
+      const fechaSalida = sumarDias(fecha, dias)
+
+      eventos.push({
+        hora: horaEntrada,
+        fn: async () => {
+          contar(fecha, 'entradas')
+          await registrarEntrada({
+            placa,
+            tipo_tarifa: tipo,
+            tarifa_personalizada: tipo === 'personalizada' ? 7000 : undefined,
+            metodoPago: tipo === 'mensualidad' ? metodo : undefined
+          })
+          if (tipo === 'mensualidad') vender(fecha, 60000, metodo, 'parqueadero')
+          programar(fechaSalida, horaSalida, async () => {
+            const hoy = hoySql()
+            contar(hoy, 'salidas')
+            if (tipo === 'mensualidad') {
+              const { transaccion } = await liquidar({ placa })
+              revisar(transaccion, null, `${placa}: la mensualidad no cobra al salir`)
+              return
+            }
+            const vehicle = vehiculos.buscarActivoPorPlaca(placa)
+            const segundos = Math.floor(
+              (Date.now() - desdeTextoSql(vehicle.hora_entrada).getTime()) / 1000
+            )
+            const horas = Math.max(1, Math.ceil(segundos / 3600))
+            const perdido = azar() < 0.08
+            const porTiempo =
+              tipo === 'personalizada'
+                ? 7000
+                : segundos <= c.minutos_gracia * 60
+                  ? 0
+                  : tipo === 'amanecida'
+                    ? Math.ceil(horas / c.horas_tope_dia) * c.tarifa_amanecida
+                    : cuentaAparte(c, segundos)
+            const calculado = porTiempo + (perdido ? 2000 : 0)
+            const acordado = calculado >= 1000 && azar() < 0.15 ? calculado - 1000 : undefined
+            const cobrado = acordado ?? calculado
+
+            revisar(cotizar({ placa, ticketPerdido: perdido }).cobro.total, calculado, `${placa}: cotización`)
+            const { transaccion } = await liquidar({
+              placa,
+              ticketPerdido: perdido,
+              metodoPago: metodo,
+              totalAcordado: acordado,
+              imprimir: false
+            })
+            revisar(transaccion.monto, cobrado, `${placa}: cobro`)
+            vender(hoy, cobrado, metodo, 'parqueadero', calculado - cobrado)
+          })
+        }
+      })
+    }
+
+    for (let i = 0, n = entre(0, 2); i < n; i++) {
+      const placa = `L${semilla}${++placas}`
+      const metodo = uno('efectivo', 'transferencia')
+      eventos.push({
+        hora: '20:30:00',
+        fn: async () => {
+          const pactado = azar() < 0.2 ? 9000 : null
+          const moto = ingresarLavado({ placa, tipoLavadaId: lavada.id, valorPactado: pactado })
+          const lista = pactado ?? 12000
+          const acordado = azar() < 0.2 ? lista - 2000 : undefined
+          await entregarLavado({ id: moto.id, metodoPago: metodo, totalAcordado: acordado, imprimir: false })
+          vender(fecha, acordado ?? lista, metodo, 'lavadero', acordado === undefined ? 0 : 2000)
+        }
+      })
+    }
+
+    // La jornada de ayer que se olvidó se cierra hoy: antes de cobrar, la de hoy
+    // abre con lo que quedó; después, sigue con la base predeterminada.
+    if (olvidada && azar() < 0.5) {
+      reloj.a(`${fecha} 06:30:00`)
+      const queda = entre(1, 5) * 10000
+      const dia = olvidada
+      cerrarCaja({ fecha: dia, conteoFinal: resumenCaja(dia).esperado, quedaEnCaja: Math.min(queda, resumenCaja(dia).esperado) })
+      ultimaJornada = { fecha: dia, cerrada: true, queda: resumenCaja(dia).quedaEnCaja }
+      olvidada = null
+    }
+
+    const baseEsperada = ultimaJornada?.cerrada ? ultimaJornada.queda : BASE_PREDETERMINADA
+
+    // Una salida puede programar otra en el mismo día: se recorre hasta vaciar.
+    let pendientes = [...eventos]
+    while (pendientes.length) {
+      pendientes.sort((a, b) => a.hora.localeCompare(b.hora))
+      for (const e of pendientes) {
+        reloj.a(`${fecha} ${e.hora}`)
+        await e.fn()
+      }
+      pendientes = agenda.get(fecha) ?? []
+      agenda.delete(fecha)
+    }
+
+    reloj.a(`${fecha} 21:00:00`)
+    revisarPeriodos(fecha)
+
+    const caja = resumenCaja(fecha)
+    const hoyEnLibro = suma(fecha, fecha)
+    revisar(caja.baseInicial, baseEsperada, `${fecha}: base de la jornada`)
+    revisar(caja.efectivo, hoyEnLibro.efectivo, `${fecha}: efectivo en caja`)
+    revisar(caja.transferencia, hoyEnLibro.transferencia, `${fecha}: transferencias en caja`)
+    revisar(caja.esperado, baseEsperada + hoyEnLibro.efectivo, `${fecha}: debe haber en el cajón`)
+    revisar(caja.totalVentas, hoyEnLibro.total, `${fecha}: ventas en caja`)
+    revisar(
+      caja.movimientos.length,
+      hoyEnLibro.operaciones,
+      `${fecha}: movimientos de la jornada`
+    )
+
+    const anteriorApp = caja.anterior
+    revisar(anteriorApp?.fecha ?? null, ultimaJornada?.fecha ?? null, `${fecha}: jornada anterior`)
+
+    if (olvidada) {
+      // Sigue sin cerrarse: ahora es la que se olvidó antes de hoy.
+      reloj.a(`${fecha} 21:10:00`)
+      cerrarCaja({ fecha: olvidada, conteoFinal: resumenCaja(olvidada).esperado })
+      olvidada = null
+    }
+
+    if (azar() < 0.15) {
+      olvidada = fecha
+      ultimaJornada = { fecha, cerrada: false }
+      continue
+    }
+
+    const diferencia = uno(0, 0, 0, -2000, 1000)
+    const conteo = Math.max(0, caja.esperado + diferencia)
+    const queda = Math.min(conteo, entre(0, 8) * 10000)
+    reloj.a(`${fecha} 21:15:00`)
+    telegram.llamadas.length = 0
+    const cierre = cerrarCaja({ conteoFinal: conteo, quedaEnCaja: queda })
+    await avisarCierre(fecha)
+    revisar(cierre.diferencia, conteo - caja.esperado, `${fecha}: diferencia del cierre`)
+    jornadasCerradas++
+
+    const texto = telegram.llamadas[0]?.cuerpo.text ?? ''
+    const pesos = (v) => `$${Number(v).toLocaleString('es-CO')}`
+    const mes = suma(`${fecha.slice(0, 7)}-01`, fecha)
+    const mov = movimiento.get(fecha) ?? { entradas: 0, salidas: 0 }
+    for (const linea of [
+      `Ventas del día: ${pesos(hoyEnLibro.total)}`,
+      `Efectivo: ${pesos(hoyEnLibro.efectivo)}`,
+      `Transferencia: ${pesos(hoyEnLibro.transferencia)}`,
+      `Lavadero: ${pesos(hoyEnLibro.lavadero)}`,
+      `Parqueadero: ${pesos(hoyEnLibro.total - hoyEnLibro.lavadero)}`,
+      `Debía haber: ${pesos(caja.esperado)}`,
+      `Contado: ${pesos(conteo)}`,
+      `Quedó en el cajón: ${pesos(queda)}`,
+      `Entradas: ${mov.entradas} · Salidas: ${mov.salidas}`,
+      `Ventas del mes hasta este día: ${pesos(mes.total)}`
+    ]) {
+      if (!texto.includes(linea)) errores.push(`${fecha}: el aviso no dice "${linea}"`)
+    }
+
+    // A veces se cobra algo después de cerrar: suma a lo esperado, la diferencia
+    // del cierre no se mueve y lo que quedó tampoco.
+    if (azar() < 0.1) {
+      reloj.a(`${fecha} 22:00:00`)
+      const moto = ingresarLavado({ placa: `T${semilla}${++placas}`, tipoLavadaId: lavada.id })
+      await entregarLavado({ id: moto.id, metodoPago: 'efectivo', imprimir: false })
+      vender(fecha, 12000, 'efectivo', 'lavadero')
+      const tras = resumenCaja(fecha)
+      revisar(tras.esperado, caja.esperado + 12000, `${fecha}: efectivo después del cierre`)
+      revisar(tras.diferencia, cierre.diferencia, `${fecha}: la diferencia queda congelada`)
+    }
+
+    ultimaJornada = { fecha, cerrada: true, queda }
+  }
+
+  function revisarPeriodos(fecha) {
+    const m = metricasVentas()
+    revisar(m.hoy, fecha, `${fecha}: hoy`)
+    const lunes = lunesDe(fecha)
+    const unoDelMes = `${fecha.slice(0, 7)}-01`
+    revisar(m.semana.desde, lunes, `${fecha}: la semana empieza el lunes`)
+    revisar(m.mes.desde, unoDelMes, `${fecha}: el mes empieza el 1`)
+
+    for (const [periodo, desdeP] of [['dia', fecha], ['semana', lunes], ['mes', unoDelMes]]) {
+      const libroP = suma(desdeP, fecha)
+      for (const campo of Object.keys(libroP)) {
+        revisar(m[periodo][campo], libroP[campo], `${fecha}: ${periodo}.${campo}`)
+      }
+    }
+
+    const dias = new Set(libro.filter((v) => v.fecha >= unoDelMes && v.fecha <= fecha).map((v) => v.fecha))
+    revisar(m.serieMes.length, dias.size, `${fecha}: días con ventas en la gráfica`)
+    for (const d of m.serieMes) {
+      const libroD = suma(d.dia, d.dia)
+      revisar(d.total, libroD.total, `${d.dia}: barra de la gráfica`)
+      revisar(d.efectivo, libroD.efectivo, `${d.dia}: efectivo de la barra`)
+      revisar(d.transferencia, libroD.transferencia, `${d.dia}: transferencia de la barra`)
+    }
+    revisar(
+      m.serieMes.reduce((s, d) => s + d.total, 0),
+      m.mes.total,
+      `${fecha}: la gráfica suma lo mismo que el mes`
+    )
+
+    const stats = vehiculos.estadisticasDelDia()
+    const mov = movimiento.get(fecha) ?? { entradas: 0, salidas: 0 }
+    revisar(stats.recaudoHoy, suma(fecha, fecha).total, `${fecha}: recaudo del panel`)
+    revisar(stats.entradasHoy, mov.entradas, `${fecha}: entradas del panel`)
+    revisar(stats.salidasHoy, mov.salidas, `${fecha}: salidas del panel`)
+  }
+
+  reloj.restaurar()
+  telegram.restaurar()
+
+  const dias = Math.round((Date.parse(hasta) - Date.parse(desde)) / 86400000) + 1
+  iguales(
+    errores.length,
+    0,
+    `${nombre}: ${dias} días, ${libro.length} ventas y ${jornadasCerradas} cierres cuadran con el libro` +
+      (errores.length ? ` -> ${errores.slice(0, 5).join(' | ')}` : '')
+  )
+}
+
+async function mesesDeOperacion() {
+  console.log('\nMeses de operación, día por día')
+  // Cada periodo en una base nueva: su libro empieza en cero.
+  await enBaseNueva(() => operarPeriodo('octubre a diciembre', '2026-10-19', '2026-12-03', 11))
+  await enBaseNueva(() => operarPeriodo('cambio de año', '2026-12-27', '2027-01-06', 22))
+  await enBaseNueva(() => operarPeriodo('febrero bisiesto', '2028-02-20', '2028-03-05', 33))
+  await enBaseNueva(() => operarPeriodo('febrero corto', '2027-02-22', '2027-03-03', 44))
 }
 
 correr()

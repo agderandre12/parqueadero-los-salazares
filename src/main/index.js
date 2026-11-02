@@ -2,8 +2,11 @@ import { app, shell, BrowserWindow } from 'electron'
 import { join } from 'path'
 import { getDb, closeDb, dbPath } from './db/index.js'
 import { registrarHandlers } from './ipc/handlers.js'
+import { reintentarAvisos } from './services/telegram.js'
 
 const esDev = !app.isPackaged
+
+const MINUTOS_REINTENTO_AVISOS = 5
 
 let ventana = null
 
@@ -65,6 +68,10 @@ if (!app.requestSingleInstanceLock()) {
 
     registrarHandlers()
     crearVentana()
+
+    // Un cierre hecho sin internet llega cuando vuelva, aunque sea otro día.
+    reintentarAvisos()
+    setInterval(reintentarAvisos, MINUTOS_REINTENTO_AVISOS * 60000)
 
     app.on('activate', () => {
       if (BrowserWindow.getAllWindows().length === 0) crearVentana()

@@ -1,4 +1,4 @@
-import { updateSettings } from '../db/settingsRepo.js'
+import { getSettings, updateSettings } from '../db/settingsRepo.js'
 import { normalizarTramos } from './pricing.js'
 
 /*
@@ -21,7 +21,7 @@ const CANTIDADES = {
   horas_tope_dia: { etiqueta: 'Las horas por bloque', min: 1, max: 48 }
 }
 
-const BANDERAS = ['imprimir_automatico', 'impresora_sin_tildes']
+const BANDERAS = ['imprimir_automatico', 'impresora_sin_tildes', 'telegram_activo']
 
 const ANCHOS_PAPEL = [32, 48]
 
@@ -66,6 +66,14 @@ export function actualizarConfiguracion(patch = {}) {
 
   if ('tramos_hora' in limpio) {
     limpio.tramos_hora = JSON.stringify(normalizarTramos(limpio.tramos_hora))
+  }
+
+  for (const campo of ['telegram_token', 'telegram_chat_id']) {
+    if (campo in limpio) limpio[campo] = String(limpio[campo] ?? '').trim()
+  }
+  const telegram = { ...getSettings(), ...limpio }
+  if (telegram.telegram_activo && (!telegram.telegram_token || !telegram.telegram_chat_id)) {
+    throw new Error('Para enviar el cierre por Telegram escriba el token del bot y el chat')
   }
 
   return updateSettings(limpio)

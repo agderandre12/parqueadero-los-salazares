@@ -117,6 +117,7 @@ export default function PanelCaja({ onAviso }) {
     setQueda('')
     setObservaciones('')
     cargar()
+    const { aviso } = res.data
     onAviso?.({
       tipo: res.data.diferencia === 0 ? 'ok' : 'error',
       texto:
@@ -125,8 +126,28 @@ export default function PanelCaja({ onAviso }) {
           : `Caja cerrada con ${res.data.diferencia > 0 ? 'sobrante' : 'faltante'} de ${cop(
               Math.abs(res.data.diferencia)
             )}`,
-      detalle: `Quedan ${cop(res.data.quedaEnCaja)} en el cajón para la próxima jornada`
+      detalle: [
+        `Quedan ${cop(res.data.quedaEnCaja)} en el cajón para la próxima jornada.`,
+        aviso?.ok && 'Se avisó por Telegram.',
+        aviso && !aviso.ok && !aviso.omitido && `El aviso por Telegram quedó pendiente: ${aviso.motivo}.`
+      ]
+        .filter(Boolean)
+        .join(' ')
     })
+  }
+
+  async function reenviarAviso() {
+    setOcupado(true)
+    const res = await window.api.caja.reenviarAviso(caja.fecha)
+    setOcupado(false)
+
+    if (!res.ok) return onAviso?.({ tipo: 'error', texto: res.error })
+    setCaja(res.data)
+    onAviso?.(
+      res.data.aviso.ok
+        ? { tipo: 'ok', texto: 'Cierre enviado por Telegram' }
+        : { tipo: 'error', texto: 'No se pudo enviar el aviso', detalle: res.data.aviso.motivo }
+    )
   }
 
   async function reabrir() {
@@ -370,6 +391,29 @@ export default function PanelCaja({ onAviso }) {
             <p className="px-4 py-3 text-mini text-grafito border-t border-linea">
               {caja.observaciones}
             </p>
+          )}
+
+          {caja.avisoEstado === 'enviado' && (
+            <p className="flex items-center gap-2 px-4 py-2.5 border-t border-linea text-mini text-grafito">
+              <Icono nombre="telegram" tam={15} className="text-azul-700" />
+              El administrador recibió este cierre por Telegram.
+            </p>
+          )}
+          {caja.avisoEstado === 'pendiente' && (
+            <div className="flex items-center justify-between gap-4 px-4 py-2.5 border-t border-alerta/30 bg-alerta-50">
+              <p className="flex items-start gap-2 text-mini text-alerta">
+                <Icono nombre="telegram" tam={15} />
+                El aviso por Telegram sigue pendiente. Se reintenta solo cada 5 minutos.
+              </p>
+              <button
+                type="button"
+                onClick={reenviarAviso}
+                disabled={ocupado}
+                className="btn-alerta py-1.5 shrink-0"
+              >
+                Enviar ahora
+              </button>
+            </div>
           )}
 
           <div className="px-4 py-3 border-t border-linea">

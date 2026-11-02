@@ -21,7 +21,10 @@ const CAMPOS_EDITABLES = [
   'imprimir_automatico',
   'impresora_sin_tildes',
   'mensaje_recibo',
-  'politicas_tiquete'
+  'politicas_tiquete',
+  'telegram_activo',
+  'telegram_token',
+  'telegram_chat_id'
 ]
 
 export function getSettings() {

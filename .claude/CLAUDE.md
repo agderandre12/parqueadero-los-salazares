@@ -1,8 +1,8 @@
 # Parqueadero Los Salazares — contexto del proyecto
 
 Aplicación de escritorio **Electron + Vite + React + Tailwind + SQLite** para gestionar
-un parqueadero de motos y su lavadero. Local, sin internet, un solo archivo de base de
-datos.
+un parqueadero de motos y su lavadero. Local, un solo archivo de base de datos. Funciona
+sin internet: lo único que lo usa es el aviso del cierre por Telegram, que no bloquea nada.
 Este documento es la primera fuente de contexto para trabajar en el código: describe
 arquitectura, contrato IPC completo, modelo de datos, reglas de negocio y hardware.
 Para la versión orientada al usuario final ver [`README.md`](../README.md).
@@ -77,7 +77,8 @@ Migraciones existentes: `transactions.metodo_pago` y `settings.caja_base_predete
 (módulo de caja); `settings.horario`, `settings.impresora_sin_tildes` y
 `settings.politicas_tiquete` (rediseño del tiquete); `transactions.ajuste` (valor
 acordado al cobrar), `vehicles.locker` (locker del casco), `settings.tramos_hora`
-(reglas por tiempo) y `caja_dias.queda_en_caja` (lo que pasa la noche en el cajón).
+(reglas por tiempo), `caja_dias.queda_en_caja` (lo que pasa la noche en el cajón),
+`settings.telegram_activo/token/chat_id` y `caja_dias.aviso_estado` (aviso del cierre).
 `npm test` abre una base con el esquema de la **primera versión** (commit `4d694db`) más
 la `caja_dias` del módulo de caja (`9d348ca`) y comprueba que recibe todas las columnas y
 conserva los datos.
@@ -118,6 +119,8 @@ src/main/
     lavadero.js               Catálogo (guardarTipo/retirarTipo), ingresarLavado(), entregarLavado()
     caja.js                   Caja registradora (asegurarJornada con la base heredada,
                               resumen/abrir/cerrar/reabrir) y metricasVentas()
+    telegram.js               Aviso del cierre de caja: textoCierre(), avisarCierre(),
+                              reintentarAvisos(), probarTelegram(), buscarChat(); nunca lanza
     printer.js                componer{Tiquete,Recibo,TiqueteLavado,ReciboLavado,Prueba}() arman
                               el papel; imprimir*() lo envían y nunca lanzan; debeImprimir()
                               decide si sale el recibo; generarBytes() para pruebas/vista previa
@@ -150,6 +153,7 @@ src/renderer/src/
                                 reapertura, jornadas sin cerrar y otras jornadas
                                 (window.api.caja); se refresca solo cada 15 s
     CampoPesos.jsx              CampoPesos (punto de miles) y CampoEntero: TODO campo numérico
+    CampoMarca.jsx              Marca con recomendación en gris (lista MARCAS); entrada y lavadero
     MetodoPago.jsx              Efectivo / transferencia, sin valor por defecto
     TotalEditable.jsx           Total a cobrar con lápiz para el valor acordado con el cliente
     CascoCustodia.jsx           Casco en custodia + locker opcional (entrada y lavadero)
@@ -186,14 +190,14 @@ Nombre/NIT/dirección/teléfono/`horario` del negocio, `total_celdas`, las 4 tar
 `minutos_gracia`, `horas_tope_dia`, `tramos_hora` (JSON de las reglas por tiempo, ver
 Reglas de cobro), `caja_base_predeterminada` (base con la que se crea cada jornada de
 caja), toda la config de impresora (`impresora_tipo`, `impresora_interface`,
-`impresora_ancho`, `imprimir_automatico`, `impresora_sin_tildes`, `mensaje_recibo`) y
+`impresora_ancho`, `imprimir_automatico`, `impresora_sin_tildes`, `mensaje_recibo`),
 `politicas_tiquete` (texto, un párrafo por renglón; ver Migraciones para su `NULL`
-inicial). `getSettings()` hace `INSERT OR IGNORE` antes de leer, así que siempre hay
+inicial) y el bot (`telegram_activo`, `telegram_token`, `telegram_chat_id`). `getSettings()` hace `INSERT OR IGNORE` antes de leer, así que siempre hay
 fila. Sólo los campos en `CAMPOS_EDITABLES` (`settingsRepo.js`) se aceptan en
 `updateSettings(patch)`, y el canal `settings:update` pasa antes por
 `actualizarConfiguracion()` (`services/configuracion.js`): pesos ≥ 0, cantidades dentro
-de rango, casillas a 0/1, ancho 32 o 48 y tramos válidos, o lanza con un mensaje para el
-administrador. Sin esa validación un precio vacío se guardaba como `''` y cobraba $0.
+de rango, casillas a 0/1, ancho 32 o 48, tramos válidos y Telegram activo sólo con token
+y chat, o lanza con un mensaje para el administrador. Sin esa validación un precio vacío se guardaba como `''` y cobraba $0.
 
 ### `vehicles` — un registro por ingreso
 `placa` (normalizada: mayúsculas, sin espacios/guiones), `celda` (nullable — el
@@ -219,7 +223,8 @@ PK `fecha` `'YYYY-MM-DD'` local. Guarda **sólo lo que decide un humano**: `base
 `abierta_at`, y al cerrar `cerrada_at`, `conteo_final`, `diferencia`
 (`conteo_final - esperado`, con signo), `queda_en_caja` (lo que se deja en el cajón para
 la jornada siguiente, ≤ `conteo_final`; NULL en los cierres anteriores a la columna, que
-dejaban todo lo contado) y `observaciones` (máx. 300 caracteres).
+dejaban todo lo contado), `observaciones` (máx. 300 caracteres) y `aviso_estado` (Telegram:
+NULL = no aplica, `'pendiente'`, `'enviado'`).
 El efectivo del día **no** se guarda aquí: se deriva siempre de la vista `ventas` para
 que no haya dos verdades del mismo dinero.
 
@@ -239,7 +244,7 @@ en la misma fila, porque no hay celda ni permanencia que liquidar: `ajuste`, `mo
 
 ### Vista `ventas` — todo lo cobrado
 `UNION ALL` de `transactions` (origen `'parqueadero'`) y de los `lavados` entregados
-(origen `'lavadero'`, `fecha = hora_entrega`), con `origen, id, placa, monto,
+(origen `'lavadero'`, `fecha = hora_entrega`), con `origen, id, placa, monto, ajuste,
 metodo_pago, fecha`. Es la **única** fuente de las métricas, la caja, `recaudoHoy` y el
 "cobro acumulado" de la ficha: cada cobro vive en su tabla y la vista sólo los junta.
 
@@ -252,8 +257,11 @@ metodo_pago, fecha`. Es la **única** fuente de las métricas, la caja, `recaudo
 | `mensualidad`     | `$0` al salir — se cobró `tarifa_mensualidad` al entrar (ver Mensualidad). Sin gracia ni recargo |
 | `personalizada`   | Valor fijo de `vehicle.tarifa_personalizada`, pactado al ingresar                              |
 
-- Antes de `minutos_gracia` (10 por defecto) el cobro es `$0`, **excepto** `personalizada`
-  (esa siempre cobra el valor pactado, sin importar la permanencia).
+- Hasta cumplir `minutos_gracia` (10 por defecto) el cobro es `$0`, **excepto**
+  `personalizada` (esa siempre cobra el valor pactado, sin importar la permanencia). Se
+  compara en segundos: a los 10:00 es gracia, a los 10:01 no, y con 0 no hay gracia.
+- La permanencia se cuenta en segundos enteros: `hora_entrada` no guarda milisegundos, y
+  sin igualarlos salir a la hora exacta contaba la hora siguiente.
 - `ticketPerdido: true` suma `settings.cargo_ticket_perdido` (default $2.000) al total,
   sin afectar `montoBase`. Se guarda como `transactions.tipo = 'ticket_perdido'`.
 - `horas = Math.max(1, Math.ceil(ms / 3600000))` — la hora empezada se cobra completa.
@@ -273,11 +281,16 @@ gracia se mira antes.
 - `normalizarTramos()` valida al guardar (enteros, `hasta > desde`, `hasta ≤ 720`, valor
   ≥ 0, sin cruces) y ordena por `desde`; `calcularCobro` lee los guardados con la misma
   función pero una configuración dañada no tumba un cobro (se ignoran).
-- El cobro devuelve `tramo` (el tramo aplicado o null) y `tope` (bool); el `detalle` dice
-  `"7 h (tramo 5-12 h)"`, que es lo que sale en el recibo.
+- El cobro devuelve `tramo` (el tramo cobrado o null), `tramoTopado` (el tramo que el tope
+  anuló o null) y `tope` (bool); el `detalle` dice `"7 h (tramo 5-12 h)"` o
+  `"9 h (tope amanecida x1)"`, que es lo que sale en el recibo.
+- **Una regla por encima de la amanecida nunca se cobra**: `SimulacionCobro` pinta esas
+  horas como tope y explica por qué (antes las pintaba como regla aplicada y parecía que
+  las reglas no funcionaban), y avisa si una hora más sale más barata.
 - `simularTarifaHora(settings)` arma la tabla 1…24 h (o una hora más allá del último
   tramo, hasta 72) con la misma `calcularCobro`; la usa `precios:simular` para la vista
-  previa de Configuración con los valores **aún sin guardar**.
+  previa de Configuración con los valores **aún sin guardar**, y la tabla lo dice
+  (`sinGuardar`): los cobros siguen con lo guardado hasta oprimir Guardar.
 
 ### Valor acordado al cobrar
 
@@ -306,8 +319,10 @@ backend sólo miraba la configuración: "Cobrar sin imprimir" imprimía igual, y
 imprimir" con la automática apagada sacaba el original marcado `** COPIA **`.
 
 Ojo: `liquidar` recalcula el cobro con la hora del clic, no reutiliza la cotización en
-pantalla. Si el operario deja la vista abierta y se cruza una hora, el total cobrado puede
-ser mayor que el que se veía.
+pantalla. Por eso `Salida.jsx` recotiza cada 5 s mientras está en `'listo'`: antes, si se
+cruzaba una hora con la vista abierta, se cobraba más de lo que se veía. También limpia
+tiquete perdido, método y valor acordado al cambiar de vehículo: un tiquete perdido marcado
+le cobraba el recargo a la moto siguiente, escaneada encima, sin mostrarlo.
 
 ## Mensualidad (`src/main/services/entrada.js`)
 
@@ -373,15 +388,44 @@ una venta igual para las métricas, pero el saldo físico no se mueve.
   cerradaAt`), avisa que hay que reabrir y cerrar otra vez: esa plata está en el cajón
   pero no en `queda_en_caja`, y la jornada siguiente abriría corta.
 - `metricasVentas()` devuelve `dia`, `semana` (desde el lunes), `mes` (desde el día 1),
-  cada uno con `{ operaciones, cobrosEfectivo, efectivo, transferencia, lavadero, total }`
-  (`lavadero` es la parte del total que vino del lavadero; ya está sumada en los demás), y
-  `serieMes` (una fila por día **con ventas**). Los límites de periodo los calcula SQLite
-  (`transactionsRepo.limitesPeriodos`) para coincidir con `date(fecha)`.
+  cada uno con `{ operaciones, cobrosEfectivo, efectivo, transferencia, lavadero, lavadas,
+  descuentos, total }` (`lavadero` es la parte del total que vino del lavadero; ya está
+  sumada en los demás), y `serieMes` (una fila por día **con ventas**). Los límites de
+  periodo los calcula SQLite (`transactionsRepo.limitesPeriodos`) para coincidir con
+  `date(fecha)`, a partir de `hoySql()`: ninguna consulta usa `date('now')`, todo sale del
+  mismo reloj de JS con el que se fechan los cobros, y por eso la prueba puede moverlo.
 - La gráfica (`Tendencia` en `PanelVentas.jsx`) rellena los días sin ventas y extiende el
   eje hasta el fin del mes, para que las barras no cambien de ancho con los días: barras
   apiladas efectivo/transferencia, escala con máximo y cero, y el promedio diario
   punteado, que divide por los días transcurridos (también los que no tuvieron cobros) y
   termina en la barra de hoy.
+
+## Aviso del cierre por Telegram (`src/main/services/telegram.js`)
+
+Pedido el 2026-11-02. Al cerrar la caja, el administrador recibe el resumen del día por el
+bot que se configura en Configuración → Telegram (`telegram:buscarChat` llena el chat con
+`getUpdates`; `telegram:probar` usa lo que está en pantalla, sin guardar).
+
+- **Mismo contrato que la impresora**: nada lanza. El canal `caja:cerrar` llama
+  `cerrarCaja` (síncrona, no sabe de Telegram) y después `avisarCierre(fecha)`, y devuelve
+  el resumen con `aviso: { ok, motivo?, omitido? }`. `omitido` = Telegram apagado.
+- **Sin internet el aviso no se pierde**: `aviso_estado` queda `'pendiente'` y
+  `reintentarAvisos()` lo reenvía al arrancar y cada 5 min (`index.js`). El módulo guarda un
+  `Set` con las fechas que se están enviando para que el reintento no duplique un envío en
+  curso. `reabrirCaja` borra el estado; volver a cerrar envía de nuevo.
+- `textoCierre(fecha)` arma el mensaje en HTML de Telegram y escapa lo que escribe el
+  operario. Lee todo en el momento de enviar, así que un reintento trae los datos vigentes.
+- El token va en la URL: nunca en un mensaje de error ni en un log. `llamar()` no incluye
+  el error de `fetch` en el suyo.
+- Se usa el `fetch` del proceso principal: la CSP del renderer no aplica.
+
+## Marca recomendada (`components/CampoMarca.jsx`)
+
+`MARCAS` son las 10 de la lista, de la más común a la menos, porque con una letra gana la
+primera (`h` es Honda). Lo que falta de la marca se pinta en gris sobre el campo, sin
+lista desplegable (pedido del negocio). `Tab` acepta y sigue, `Enter` sólo acepta (no
+registra la entrada con la palabra a medias), `→` al final también. Al salir del campo una
+coincidencia exacta toma la escritura de la lista (`YAMAHA` → `Yamaha`).
 
 ## Lavadero (`src/main/services/lavadero.js`)
 
@@ -426,7 +470,7 @@ El preload (`src/preload/index.js`) expone esto como `window.api.<grupo>.<metodo
 | `vehicles:buscar`       | `vehiculos.buscar(texto)`              | Coincidencias parciales de placa entre activos (autocompletar en Salida) |
 | `vehicles:celdaLibre`   | `vehiculos.celdaLibre()`               | Menor número de celda libre, o `null` si lleno |
 | `vehicles:historial`    | `vehiculos.historial(filtros)`         | `{texto, estado, desde, hasta, limite, offset}` — usado por `Vehiculos.jsx` |
-| `vehicles:ficha`        | `vehiculos.ficha(placa)`               | `{ vehicle, activo, resumen, visitas, ultimaTransaccion }` |
+| `vehicles:ficha`        | `vehiculos.ficha(placa)`               | `{ vehicle, activo, resumen, visitas, ultimaTransaccion }`, sólo de esa placa exacta |
 | `vehicles:cotizar`      | `vehiculos.cotizar(params)`            | Sólo lectura: `{ vehicle, settings, cobro }` |
 | `vehicles:liquidar`     | `vehiculos.liquidar(params)`           | `{ vehicleId \| placa, ticketPerdido, metodoPago, totalAcordado?, imprimir? }` → cierra, cobra, imprime según el botón: `{ vehicle, transaccion, cobro, impresion }` (`transaccion.monto` es lo cobrado; `cobro`, lo calculado). Mensualidad: sólo `vehicleId \| placa`, `transaccion` e `impresion` en null |
 | `lavadero:tipos`        | `lavadero.tipos(incluirRetirados?)`    | Catálogo de lavadas vigentes (o todas) |
@@ -443,7 +487,10 @@ El preload (`src/preload/index.js`) expone esto como `window.api.<grupo>.<metodo
 | `metricas:ventas`       | `metricas.ventas()`                    | `{ hoy, dia, semana, mes, serieMes }`, con el lavadero incluido — ver sección Caja |
 | `caja:resumen`          | `caja.resumen(fecha?)`                 | Estado de la jornada (la crea si falta, con la base heredada): base, efectivo, transferencia, `operaciones`/`cobrosEfectivo`, esperado, cierre con `quedaEnCaja`, `anterior` y movimientos (filas de `ventas`) |
 | `caja:abrir`            | `caja.abrir({ baseInicial, fecha? })`  | Fija/corrige la base; devuelve el resumen |
-| `caja:cerrar`           | `caja.cerrar({ conteoFinal, quedaEnCaja?, observaciones?, fecha? })` | Cierra la jornada (también una pasada); lanza si ya estaba cerrada o si lo que queda no está entre 0 y lo contado |
+| `caja:cerrar`           | `caja.cerrar({ conteoFinal, quedaEnCaja?, observaciones?, fecha? })` | Cierra la jornada (también una pasada) y avisa por Telegram: el resumen + `aviso`; lanza si ya estaba cerrada o si lo que queda no está entre 0 y lo contado |
+| `caja:reenviarAviso`    | `caja.reenviarAviso(fecha)`            | Reintenta el aviso de una jornada cerrada: el resumen + `aviso` |
+| `telegram:probar`       | `telegram.probar({ token, chatId })`   | Mensaje de prueba con lo que está en pantalla: `{ ok, motivo? }` |
+| `telegram:buscarChat`   | `telegram.buscarChat(token)`           | `{ id, nombre }` de quien le escribió último al bot; lanza si nadie ha escrito |
 | `caja:reabrir`          | `caja.reabrir(fecha?)`                 | Deshace un cierre |
 | `caja:cierres`          | `caja.cierres(limite=14)`              | Últimas filas de `caja_dias` (historial de cierres) |
 | `printer:estado`        | `impresora.estado()`                   | `{ conectada, motivo }` — usado por el indicador del Rail y `useImpresora`. En Windows `conectada` = instalada |
@@ -630,7 +677,7 @@ de regenerarlo.
 El instalador sale **sin firma digital** (no hay certificado configurado): SmartScreen
 advierte al ejecutarlo en el equipo del cliente. No es un error del build.
 
-`pruebas/liquidacion.js` es la única prueba de integración (213 comprobaciones): cubre
+`pruebas/liquidacion.js` es la única prueba de integración (279 comprobaciones): cubre
 entradas y asignación de celdas, cotización, ticket perdido, método de pago obligatorio,
 liquidación normal, doble-cobro bloqueado, reingreso de placa, **mensualidad** (método
 obligatorio, venta al entrar con su valor/método/fecha, comprobante aunque la impresión
@@ -650,9 +697,16 @@ dentro y fuera del tramo, tope, simulación), **validación de la configuración
 y locker** (fuera del tiquete y del recibo), **lavadero** (catálogo, ingreso, valor
 pactado, catálogo copiado al ingresar, tipo retirado, tiquete con `LAV…`, entrega con
 método obligatorio y valor acordado, doble cobro, ventas y caja con el lavadero, recibo
-propio) y la **migración desde la primera versión** de la base (con un cierre de caja viejo,
-que deja en el cajón todo lo contado). Es el lugar a extender si
-se toca `pricing.js`, `liquidacion.js`, `entrada.js`, `caja.js`, `lavadero.js` o
+propio), la **migración desde la primera versión** de la base (con un cierre de caja viejo,
+que deja en el cajón todo lo contado), **reglas contra el cobro real** (cinco configuraciones
+de precios contra `cuentaAparte()`, unos 4.400 instantes cada una, y cada fila de la tabla
+cobrada de verdad por `liquidar`), **Telegram** (con `fetch` falso: mensaje, escape,
+pendiente, reintento sin duplicar, errores sin el token) y **meses de operación**
+(`operarPeriodo`: reloj falso y azar con semilla; opera día por día por los servicios reales
+con días sin abrir, cierres olvidados, cobros tras el cierre, descuentos y madrugadas, y
+cada noche compara métricas, gráfica, caja y aviso contra un libro llevado aparte. Cubre
+oct–dic, cambio de año y febrero con y sin bisiesto). Es el lugar a extender si se toca
+`pricing.js`, `liquidacion.js`, `entrada.js`, `caja.js`, `lavadero.js`, `telegram.js` o
 `printer.js`.
 
 No prueba el envío exitoso (no hay térmica en el equipo de desarrollo: se verifica en
@@ -662,9 +716,14 @@ reinicio, reglas y su aviso, tipos de lavada, total editable, cobrar sin imprimi
 lavadero completo, escáner con `LAV000002`, locker en la ficha). La caja y las métricas
 se revisaron también con 29 días simulados, con y sin un día sin cobros: día, semana, mes,
 la serie y la caja coincidieron con una cuenta hecha aparte, cada jornada abrió con lo que
-quedó en la anterior, y la gráfica se miró el día 2, a mitad y al final del mes. No se
-puede mover la fecha del sistema desde la prueba: para eso el script reemplazó el canal
-`metricas:ventas` por datos armados.
+quedó en la anterior, y la gráfica se miró el día 2, a mitad y al final del mes.
+El 2026-11-02 se recorrió toda la interfaz con clics y teclas reales sobre la app compilada
+(170 comprobaciones en todas las vistas, con el lector simulado) y un mes con el reloj
+del proceso principal movido (114, leyendo lo que se ve en Ventas y Caja los días 1, 2, 15,
+30, un mes de 31 y año nuevo). Los scripts no están en el repositorio. Ojo si se repite:
+una ventana tapada no pinta y Chromium le frena los temporizadores
+(`disable-renderer-backgrounding` y compañía), y `sendInputEvent` necesita un evento
+`char` para que Enter active un botón o envíe un formulario.
 
 Con npm ≥ 11 puede aparecer el aviso `install-scripts ... not yet covered by
 allowScripts` para `esbuild` y `electron-winstaller`: en este equipo no impidió compilar
@@ -678,11 +737,13 @@ ni correr las pruebas.
   con ticket perdido, valor acordado al cobrar, cobrar con o sin imprimir, método de
   pago, comprobante, historial por placa, métricas de ventas, caja registradora con
   cierre diario y la base que pasa de un día al siguiente, configuración editable y
-  validada, lavadero (catálogo, ingreso con
-  tiquete opcional, entrega con cobro y recibo), locker del casco, impresión térmica y
+  validada, aviso del cierre por Telegram, marca recomendada, lavadero (catálogo, ingreso
+  con tiquete opcional, entrega con cobro y recibo), locker del casco, impresión térmica y
   lector de código de barras.
 - **Por verificar en sitio**: que la térmica lea bien el código `LAV…` de 9 caracteres
-  con módulo de 2 puntos (el mismo ancho que una placa de 7, que ya se usaba).
+  con módulo de 2 puntos (el mismo ancho que una placa de 7, que ya se usaba), y que un
+  mensaje llegue a un chat real: sólo se probó que la API rechaza un token falso con su
+  mensaje en español.
 - **Ideas que el negocio no ha pedido**: estados intermedios del lavado (en lavado /
   lista para entregar), el lavadero en el historial de Vehículos, y vigencias de la
   mensualidad (ver Mensualidad).

@@ -27,6 +27,7 @@ const SECCIONES = [
   { id: 'capacidad', etiqueta: 'Capacidad', grupo: 'Configuración' },
   { id: 'impresora', etiqueta: 'Impresora', grupo: 'Configuración' },
   { id: 'tiquete', etiqueta: 'Tiquete', grupo: 'Configuración' },
+  { id: 'telegram', etiqueta: 'Telegram', grupo: 'Configuración' },
   { id: 'escaner', etiqueta: 'Escáner', grupo: 'Configuración' }
 ]
 
@@ -80,6 +81,7 @@ export default function Configuracion({ settings, seccionInicial = 'tarifas', on
   const [probando, setProbando] = useState(false)
   const [instaladas, setInstaladas] = useState(null)
   const [conexionManual, setConexionManual] = useState(false)
+  const [telegramOcupado, setTelegramOcupado] = useState(false)
   // La configuración sobre la que se empezó a editar: con ella se sabe qué
   // campos tocó el administrador cuando llega una nueva.
   const base = useRef(settings)
@@ -149,6 +151,38 @@ export default function Configuracion({ settings, seccionInicial = 'tarifas', on
         : {
             tipo: 'error',
             texto: 'La impresora no respondió',
+            detalle: res.data?.motivo || res.error
+          }
+    )
+  }
+
+  async function buscarChatTelegram() {
+    setTelegramOcupado(true)
+    const res = await window.api.telegram.buscarChat(form.telegram_token)
+    setTelegramOcupado(false)
+
+    if (res.ok) {
+      set('telegram_chat_id')(res.data.id)
+      onAviso?.({ tipo: 'ok', texto: `Chat encontrado: ${res.data.nombre || res.data.id}` })
+    } else {
+      onAviso?.({ tipo: 'error', texto: 'No se encontró el chat', detalle: res.error })
+    }
+  }
+
+  async function probarTelegram() {
+    setTelegramOcupado(true)
+    const res = await window.api.telegram.probar({
+      token: form.telegram_token,
+      chatId: form.telegram_chat_id
+    })
+    setTelegramOcupado(false)
+
+    onAviso?.(
+      res.ok && res.data?.ok
+        ? { tipo: 'ok', texto: 'Mensaje de prueba enviado' }
+        : {
+            tipo: 'error',
+            texto: 'No se pudo enviar el mensaje',
             detalle: res.data?.motivo || res.error
           }
     )
@@ -496,6 +530,76 @@ export default function Configuracion({ settings, seccionInicial = 'tarifas', on
                 teléfono de la sección Negocio, la placa en letra grande, su código de barras y la
                 hora de entrada. Déjelas vacías para imprimir el tiquete sin políticas.
               </p>
+            </section>
+          )}
+
+          {seccion === 'telegram' && (
+            <section className="panel overflow-hidden">
+              <Ajuste
+                titulo="Avisar cada cierre de caja"
+                ayuda="El administrador recibe las ventas del día, el cuadre y lo que quedó en el cajón. Si el equipo no tiene internet, el aviso sale cuando vuelva."
+                ancho="w-14"
+              >
+                <input
+                  type="checkbox"
+                  aria-label="Avisar cada cierre de caja"
+                  checked={Boolean(Number(form.telegram_activo))}
+                  onChange={(e) => set('telegram_activo')(e.target.checked ? 1 : 0)}
+                  className="w-4 h-4 rounded ml-auto block"
+                />
+              </Ajuste>
+              <Ajuste titulo="Token del bot" ayuda="Lo entrega @BotFather al crear el bot" ancho="w-72">
+                <input
+                  type="password"
+                  aria-label="Token del bot"
+                  value={form.telegram_token ?? ''}
+                  onChange={(e) => set('telegram_token')(e.target.value)}
+                  autoComplete="off"
+                  spellCheck={false}
+                  className="campo num"
+                />
+              </Ajuste>
+              <Ajuste
+                titulo="Chat del administrador"
+                ayuda="Después de escribirle al bot, toque Buscar y se llena solo"
+                ancho="w-72"
+              >
+                <div className="flex gap-2">
+                  <input
+                    aria-label="Chat del administrador"
+                    value={form.telegram_chat_id ?? ''}
+                    onChange={(e) => set('telegram_chat_id')(e.target.value)}
+                    spellCheck={false}
+                    className="campo num min-w-0"
+                  />
+                  <button
+                    type="button"
+                    onClick={buscarChatTelegram}
+                    disabled={telegramOcupado || !form.telegram_token}
+                    className="btn-neutro shrink-0"
+                  >
+                    Buscar
+                  </button>
+                </div>
+              </Ajuste>
+
+              <div className="px-4 py-3.5 bg-lienzo space-y-2.5">
+                <button
+                  type="button"
+                  onClick={probarTelegram}
+                  disabled={telegramOcupado || !form.telegram_token || !form.telegram_chat_id}
+                  className="btn-neutro"
+                >
+                  <Icono nombre="telegram" tam={16} />
+                  {telegramOcupado ? 'Consultando…' : 'Enviar mensaje de prueba'}
+                </button>
+                <ol className="list-decimal pl-4 space-y-1 text-mini text-grafito">
+                  <li>En Telegram, busque a @BotFather, escriba /newbot y copie el token aquí.</li>
+                  <li>Desde el Telegram del administrador, abra el bot y escríbale cualquier cosa.</li>
+                  <li>Toque Buscar y luego Enviar mensaje de prueba.</li>
+                  <li>Si el mensaje llegó, active el aviso y guarde.</li>
+                </ol>
+              </div>
             </section>
           )}
 

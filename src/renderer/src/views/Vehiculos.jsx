@@ -42,6 +42,11 @@ export default function Vehiculos({ ahora, placaInicial, onSalida, onAviso }) {
     return () => clearTimeout(id)
   }, [consultar])
 
+  // El lector puede traer otra placa con la vista ya abierta.
+  useEffect(() => {
+    if (placaInicial) setSeleccion(placaInicial)
+  }, [placaInicial])
+
   // Ficha del seleccionado
   useEffect(() => {
     if (!seleccion) {

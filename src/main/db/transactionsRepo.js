@@ -1,5 +1,5 @@
 import { getDb } from './index.js'
-import { ahoraSql } from '../services/tiempo.js'
+import { ahoraSql, hoySql } from '../services/tiempo.js'
 
 /**
  * Registra el pago de una liquidación. `ajuste` es la diferencia entre lo que
@@ -56,15 +56,9 @@ export function marcarImpreso(id, impreso = true) {
 
 /** Historial del día (o de una fecha 'YYYY-MM-DD'). */
 export function transaccionesDelDia(fecha = null) {
-  const db = getDb()
-  if (fecha) {
-    return db
-      .prepare('SELECT * FROM transactions WHERE date(fecha) = ? ORDER BY fecha DESC')
-      .all(fecha)
-  }
-  return db
-    .prepare(`SELECT * FROM transactions WHERE date(fecha) = date('now','localtime') ORDER BY fecha DESC`)
-    .all()
+  return getDb()
+    .prepare('SELECT * FROM transactions WHERE date(fecha) = ? ORDER BY fecha DESC')
+    .all(fecha || hoySql())
 }
 
 export function ultimasTransacciones(limite = 20) {
@@ -84,9 +78,11 @@ export function ultimaDeVehiculo(vehicleId) {
  * Ventas de un rango de fechas ('YYYY-MM-DD', ambos extremos incluidos),
  * separadas por método de pago. `efectivo` es lo único que toca el cajón.
  * Lee la vista `ventas`: incluye lo cobrado en el lavadero, que además se
- * informa aparte en `lavadero`.
+ * informa aparte en `lavadero`. `descuentos` es lo que se dejó de cobrar por
+ * valores acordados por debajo de lo calculado.
  * @returns {{operaciones:number, cobrosEfectivo:number, efectivo:number,
- *            transferencia:number, lavadero:number, total:number}}
+ *            transferencia:number, lavadero:number, lavadas:number,
+ *            descuentos:number, total:number}}
  */
 export function totalesEntre(desde, hasta) {
   return getDb()
@@ -97,6 +93,8 @@ export function totalesEntre(desde, hasta) {
          COALESCE(SUM(CASE WHEN metodo_pago = 'efectivo'      THEN monto ELSE 0 END), 0) AS efectivo,
          COALESCE(SUM(CASE WHEN metodo_pago = 'transferencia' THEN monto ELSE 0 END), 0) AS transferencia,
          COALESCE(SUM(CASE WHEN origen = 'lavadero'           THEN monto ELSE 0 END), 0) AS lavadero,
+         COALESCE(SUM(CASE WHEN origen = 'lavadero'           THEN 1     ELSE 0 END), 0) AS lavadas,
+         COALESCE(SUM(CASE WHEN ajuste < 0                    THEN -ajuste ELSE 0 END), 0) AS descuentos,
          COALESCE(SUM(monto), 0) AS total
        FROM ventas
        WHERE date(fecha) BETWEEN ? AND ?`
@@ -130,18 +128,19 @@ export function ventasDelDia(fecha) {
 
 /**
  * Límites de los tres periodos que muestra la vista de métricas, resueltos por
- * SQLite para que coincidan con el `date(...,'localtime')` de las consultas.
+ * SQLite para que coincidan con el `date(fecha)` de las consultas. El día sale
+ * del mismo reloj con el que se fechan los cobros.
  *
  * `'-6 days','weekday 1'` da el lunes de la semana en curso: se retrocede casi
  * una semana y se avanza al siguiente lunes, que es el de esta misma semana.
  */
-export function limitesPeriodos() {
+export function limitesPeriodos(hoy = hoySql()) {
   return getDb()
     .prepare(
       `SELECT
-         date('now','localtime')                          AS hoy,
-         date('now','localtime','-6 days','weekday 1')     AS inicioSemana,
-         date('now','localtime','start of month')          AS inicioMes`
+         date(@hoy)                       AS hoy,
+         date(@hoy,'-6 days','weekday 1') AS inicioSemana,
+         date(@hoy,'start of month')      AS inicioMes`
     )
-    .get()
+    .get({ hoy })
 }

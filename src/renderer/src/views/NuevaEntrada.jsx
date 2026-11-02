@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
+import CampoMarca from '../components/CampoMarca.jsx'
 import CampoPesos from '../components/CampoPesos.jsx'
 import CascoCustodia from '../components/CascoCustodia.jsx'
 import Icono from '../components/Icono.jsx'
@@ -190,13 +191,11 @@ export default function NuevaEntrada({ settings, celdaSugerida, hayCupo, onRegis
               <label className="etiqueta" htmlFor="marca">
                 Marca <span className="text-niebla font-normal">opcional</span>
               </label>
-              <input
+              <CampoMarca
                 id="marca"
-                value={form.marca}
-                onChange={set('marca')}
-                placeholder="Bajaj"
-                autoComplete="off"
-                className="campo"
+                valor={form.marca}
+                disabled={guardando}
+                onChange={(marca) => setForm((f) => ({ ...f, marca }))}
               />
             </div>
             <div>

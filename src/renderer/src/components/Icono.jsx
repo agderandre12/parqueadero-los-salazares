@@ -6,6 +6,12 @@
  */
 
 const TRAZOS = {
+  telegram: (
+    <>
+      <path d="M21 3.5 2.8 10.6 9 13l2.4 6.8L21 3.5Z" />
+      <path d="m9 13 12-9.5" />
+    </>
+  ),
   panel: (
     <>
       <rect x="3" y="3" width="7.5" height="7.5" rx="1.5" />

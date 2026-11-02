@@ -47,8 +47,13 @@ const api = {
     resumen: (fecha) => invocar('caja:resumen', fecha),
     abrir: (params) => invocar('caja:abrir', params),
     cerrar: (params) => invocar('caja:cerrar', params),
+    reenviarAviso: (fecha) => invocar('caja:reenviarAviso', fecha),
     reabrir: (fecha) => invocar('caja:reabrir', fecha),
     cierres: (limite) => invocar('caja:cierres', limite)
+  },
+  telegram: {
+    probar: (datos) => invocar('telegram:probar', datos),
+    buscarChat: (token) => invocar('telegram:buscarChat', token)
   },
   impresora: {
     estado: () => invocar('printer:estado'),

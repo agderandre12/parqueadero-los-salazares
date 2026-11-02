@@ -96,8 +96,24 @@ function migrar(conexion) {
     conexion.exec(`ALTER TABLE settings ADD COLUMN tramos_hora TEXT NOT NULL DEFAULT '[]'`)
   }
 
+  if (falta('settings', 'telegram_activo')) {
+    conexion.exec('ALTER TABLE settings ADD COLUMN telegram_activo INTEGER NOT NULL DEFAULT 0')
+  }
+
+  if (falta('settings', 'telegram_token')) {
+    conexion.exec(`ALTER TABLE settings ADD COLUMN telegram_token TEXT NOT NULL DEFAULT ''`)
+  }
+
+  if (falta('settings', 'telegram_chat_id')) {
+    conexion.exec(`ALTER TABLE settings ADD COLUMN telegram_chat_id TEXT NOT NULL DEFAULT ''`)
+  }
+
   if (falta('caja_dias', 'queda_en_caja')) {
     conexion.exec('ALTER TABLE caja_dias ADD COLUMN queda_en_caja INTEGER')
+  }
+
+  if (falta('caja_dias', 'aviso_estado')) {
+    conexion.exec('ALTER TABLE caja_dias ADD COLUMN aviso_estado TEXT')
   }
 }
 

@@ -1,5 +1,5 @@
 import { getDb } from './index.js'
-import { ahoraSql } from '../services/tiempo.js'
+import { ahoraSql, hoySql } from '../services/tiempo.js'
 
 const normalizarPlaca = (p) => String(p || '').toUpperCase().replace(/[\s-]/g, '').trim()
 
@@ -100,8 +100,8 @@ export function primeraCeldaLibre() {
   return null
 }
 
-/** Estadísticas del día para el header del dashboard. */
-export function estadisticasHoy() {
+/** Estadísticas de un día: el header del dashboard y el aviso del cierre de caja. */
+export function estadisticasDelDia(fecha = hoySql()) {
   const db = getDb()
   const { total_celdas: total } = db.prepare('SELECT total_celdas FROM settings WHERE id = 1').get()
 
@@ -110,22 +110,19 @@ export function estadisticasHoy() {
     .get().n
 
   const entradasHoy = db
-    .prepare(`SELECT COUNT(*) AS n FROM vehicles WHERE date(hora_entrada) = date('now','localtime')`)
-    .get().n
+    .prepare('SELECT COUNT(*) AS n FROM vehicles WHERE date(hora_entrada) = ?')
+    .get(fecha).n
 
   const salidasHoy = db
     .prepare(
       `SELECT COUNT(*) AS n FROM vehicles
-        WHERE hora_salida IS NOT NULL AND date(hora_salida) = date('now','localtime')`
+        WHERE hora_salida IS NOT NULL AND date(hora_salida) = ?`
     )
-    .get().n
+    .get(fecha).n
 
   const recaudoHoy = db
-    .prepare(
-      `SELECT COALESCE(SUM(monto), 0) AS total FROM ventas
-        WHERE date(fecha) = date('now','localtime')`
-    )
-    .get().total
+    .prepare('SELECT COALESCE(SUM(monto), 0) AS total FROM ventas WHERE date(fecha) = ?')
+    .get(fecha).total
 
   return {
     totalCeldas: total,
@@ -138,12 +135,14 @@ export function estadisticasHoy() {
 }
 
 /**
- * Historial filtrable para la vista de Vehículos.
- * @param {{texto?:string, estado?:'activo'|'finalizado'|'todos', desde?:string,
- *          hasta?:string, limite?:number, offset?:number}} filtros
+ * Historial filtrable para la vista de Vehículos. `texto` busca coincidencias
+ * parciales; `placa` trae sólo esa placa, para la ficha.
+ * @param {{texto?:string, placa?:string, estado?:'activo'|'finalizado'|'todos',
+ *          desde?:string, hasta?:string, limite?:number, offset?:number}} filtros
  */
 export function historial({
   texto = '',
+  placa = null,
   estado = 'todos',
   desde = null,
   hasta = null,
@@ -158,6 +157,11 @@ export function historial({
     // La placa se normaliza (sin espacios ni guiones); marca y color van tal cual.
     condiciones.push('(placa LIKE ? OR marca LIKE ? OR color LIKE ?)')
     params.push(`%${normalizarPlaca(q)}%`, `%${q}%`, `%${q}%`)
+  }
+
+  if (placa) {
+    condiciones.push('placa = ?')
+    params.push(normalizarPlaca(placa))
   }
 
   if (estado === 'activo' || estado === 'finalizado') {

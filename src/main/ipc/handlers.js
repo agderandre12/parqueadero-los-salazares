@@ -25,6 +25,7 @@ import {
   estadoImpresora,
   listarImpresoras
 } from '../services/printer.js'
+import { avisarCierre, buscarChat, probarTelegram } from '../services/telegram.js'
 import { hoySql } from '../services/tiempo.js'
 
 /** Envuelve un handler para que el renderer reciba siempre {ok, data|error}. */
@@ -50,7 +51,7 @@ export function registrarHandlers() {
 
   // ---------------- Dashboard --------------------
   manejar('dashboard:resumen', () => ({
-    stats: vehiculos.estadisticasHoy(),
+    stats: vehiculos.estadisticasDelDia(),
     ...vehiculos.mapaCeldas(),
     ultimos: vehiculos.ultimosIngresos(7),
     settings: getSettings()
@@ -71,7 +72,7 @@ export function registrarHandlers() {
   manejar('vehicles:ficha', (placa) => {
     const activo = vehiculos.buscarActivoPorPlaca(placa)
     const resumen = vehiculos.resumenPlaca(placa)
-    const historialPlaca = vehiculos.historial({ texto: placa, limite: 20 })
+    const historialPlaca = vehiculos.historial({ placa, limite: 20 })
     const ultimoRegistro = activo || historialPlaca[0] || null
 
     return {
@@ -118,9 +119,24 @@ export function registrarHandlers() {
 
   manejar('caja:resumen', (fecha) => resumenCaja(fecha || undefined))
   manejar('caja:abrir', (params) => abrirCaja(params))
-  manejar('caja:cerrar', (params) => cerrarCaja(params))
+  // El cierre ya quedó guardado cuando se avisa: si Telegram falla no se deshace
+  // nada, `aviso` lo informa y el aviso queda pendiente.
+  manejar('caja:cerrar', async (params) => {
+    const { fecha } = cerrarCaja(params)
+    const aviso = await avisarCierre(fecha)
+    return { ...resumenCaja(fecha), aviso }
+  })
+  manejar('caja:reenviarAviso', async (fecha) => {
+    const aviso = await avisarCierre(fecha)
+    return { ...resumenCaja(fecha), aviso }
+  })
   manejar('caja:reabrir', (fecha) => reabrirCaja(fecha || undefined))
   manejar('caja:cierres', (limite = 14) => historialCierres(limite))
+
+  // ---------------- Telegram ---------------------
+  // Con lo que está en pantalla: se prueba antes de guardar.
+  manejar('telegram:probar', (datos) => probarTelegram(datos))
+  manejar('telegram:buscarChat', (token) => buscarChat(token))
 
   // ---------------- Impresora --------------------
   manejar('printer:estado', () => estadoImpresora(getSettings()))

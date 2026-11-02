@@ -93,6 +93,7 @@ export function resumenCaja(fecha = hoySql()) {
     diferencia: dia.diferencia,
     quedaEnCaja: dia.queda_en_caja,
     observaciones: dia.observaciones,
+    avisoEstado: dia.aviso_estado,
     anterior: anterior
       ? {
           fecha: anterior.fecha,

@@ -69,12 +69,28 @@ export function reabrirDia(fecha) {
   getDb()
     .prepare(
       `UPDATE caja_dias
-          SET cerrada_at = NULL, conteo_final = NULL, diferencia = NULL, queda_en_caja = NULL
+          SET cerrada_at = NULL, conteo_final = NULL, diferencia = NULL, queda_en_caja = NULL,
+              aviso_estado = NULL
         WHERE fecha = ?`
     )
     .run(fecha)
 
   return obtenerDia(fecha)
+}
+
+/** Estado del aviso del cierre: 'pendiente' o 'enviado'. */
+export function marcarAviso(fecha, estado) {
+  getDb()
+    .prepare('UPDATE caja_dias SET aviso_estado = ? WHERE fecha = ? AND cerrada_at IS NOT NULL')
+    .run(estado, fecha)
+}
+
+/** Cierres cuyo aviso falta por enviar, del más viejo al más nuevo. */
+export function avisosPendientes() {
+  return getDb()
+    .prepare(`SELECT fecha FROM caja_dias WHERE aviso_estado = 'pendiente' ORDER BY fecha ASC`)
+    .all()
+    .map((d) => d.fecha)
 }
 
 /** Últimos cierres, para el historial de la vista de caja. */

@@ -1,7 +1,8 @@
 # Parqueadero Los Salazares
 
-Aplicación de escritorio (local, sin internet) para la gestión de un parqueadero de motos
-y su lavadero. Electron + Vite + React + Tailwind CSS + SQLite.
+Aplicación de escritorio para la gestión de un parqueadero de motos y su lavadero.
+Electron + Vite + React + Tailwind CSS + SQLite. Funciona sin internet; sólo el aviso del
+cierre de caja por Telegram lo necesita, y si falta sale cuando vuelva.
 
 ## Requisitos
 
@@ -70,6 +71,8 @@ y copie el `.db`; si no se puede cerrar, copie juntos `parqueadero.db`,
      Revisar que las tildes y las dos reglas salgan bien y escanear su código: la
      aplicación debe avisar *"PRUEBA no está adentro"*.
    - *Tiquete*: revisar las políticas.
+   - *Telegram*: crear el bot y activar el aviso del cierre de caja (ver
+     [Aviso por Telegram](#aviso-del-cierre-por-telegram)).
 6. Registrar una entrada de prueba, escanear el tiquete y cobrarla.
 
 La aplicación es de **instancia única**: si el operario la abre otra vez (doble clic en
@@ -105,6 +108,7 @@ src/
 │  │  ├─ caja.js                 # Caja registradora y métricas de ventas
 │  │  ├─ printer.js              # Tiquetes, recibos y página de prueba (ESC/POS)
 │  │  ├─ colaWindows.js          # Envío RAW a una impresora de Windows
+│  │  ├─ telegram.js             # Aviso del cierre de caja al administrador
 │  │  └─ tiempo.js               # Fechas locales formato SQLite
 │  └─ ipc/handlers.js            # Todos los canales IPC
 ├─ preload/index.js              # Puente seguro: window.api
@@ -124,6 +128,7 @@ src/
       │  ├─ PanelVentas.jsx      # Ventas del día, semana y mes por método de pago
       │  ├─ PanelCaja.jsx        # Base, cuadre y cierre de la caja del día
       │  ├─ CampoPesos.jsx       # Campos de pesos con punto de miles (y de enteros)
+      │  ├─ CampoMarca.jsx       # Marca con recomendación mientras se escribe
       │  ├─ MetodoPago.jsx       # Efectivo / transferencia
       │  ├─ TotalEditable.jsx    # Total a cobrar con lápiz para el valor acordado
       │  ├─ CascoCustodia.jsx    # Casco en custodia + locker
@@ -172,7 +177,7 @@ la app: no hay internet en la caseta y el `Content-Security-Policy` sólo admite
 - **`settings`** — fila única (`id = 1`): nombre, NIT, dirección, teléfono, horario, total
   de celdas, tarifas (hora / amanecida / mensualidad), cargo por ticket perdido, minutos de
   gracia, reglas por tiempo, base predeterminada de la caja, configuración de la impresora
-  térmica y políticas del tiquete.
+  térmica, políticas del tiquete y el bot de Telegram.
 - **`vehicles`** — un registro por ingreso: placa, marca, color, casco y locker, celda,
   hora de entrada y salida, tipo de tarifa, tarifa personalizada, estado (`activo` /
   `finalizado`). Un índice único parcial impide que la misma placa esté activa dos veces.
@@ -181,8 +186,8 @@ la app: no hay internet en la caseta y el `Content-Security-Policy` sólo admite
   (`normal` / `ticket_perdido`) y método de pago (`efectivo` / `transferencia`).
 - **`caja_dias`** — una fila por jornada (`'YYYY-MM-DD'`): base inicial, hora de apertura y,
   al cerrar, el dinero contado, la diferencia, lo que quedó en el cajón para la jornada
-  siguiente y las observaciones. El efectivo del día **no** se guarda aquí: se suma siempre
-  desde la vista `ventas`.
+  siguiente, las observaciones y si el aviso por Telegram salió. El efectivo del día **no**
+  se guarda aquí: se suma siempre desde la vista `ventas`.
 - **`tipos_lavada`** — el catálogo del lavadero: nombre y precio. Un tipo retirado deja de
   ofrecerse pero no se borra.
 - **`lavados`** — cada moto que entra al lavadero: placa, marca, color, casco y locker, la
@@ -203,8 +208,9 @@ Todos los montos son enteros en COP. Las fechas se guardan como texto
 | Mensualidad     | Tarifa de mensualidad **cobrada al registrar la entrada**; $0 a la salida |
 | Personalizada   | Valor fijo pactado al ingresar                                            |
 
-Si la moto sale dentro de los *minutos de gracia* (10 por defecto, inclusive) no se cobra
-nada, salvo con tarifa personalizada, que siempre cobra lo pactado.
+Si la moto sale dentro de los *minutos de gracia* (10 por defecto: a los 10:00 exactos
+todavía no se cobra, a los 10:01 sí) no se cobra nada, salvo con tarifa personalizada, que
+siempre cobra lo pactado. Con 0 minutos de gracia se cobra desde el primer segundo.
 El **ticket perdido** suma $2.000 al total (configurable); no aplica a la mensualidad.
 
 ### Reglas por tiempo
@@ -218,10 +224,19 @@ valor fijo: *"más de 5 h y hasta 12 h se cobran $10.000"*. Con la hora a $2.000
 | más de 5 h y hasta 12 h | $10.000 fijos |
 | más de 12 h | otra vez por hora, con el tope de la amanecida |
 
+Cuentan las horas iniciadas: *"más de 5 h"* cubre desde la hora 6, así que con 5 h y 1 min
+la moto ya entró a la regla, y con 12 h y 1 min ya salió. Cada regla lo explica debajo.
+
+**El tope de la amanecida manda sobre las reglas.** Si una regla vale más que la amanecida
+se cobra la amanecida, no la regla: con la amanecida a $10.000, una regla de $11.110 nunca
+se cobra. La tabla pinta esas horas como tope y dice qué hacer (subir la amanecida o bajar
+la regla). También avisa si quedarse más tiempo sale más barato.
+
 Se pueden crear varias reglas, siempre que no se crucen. Debajo, la tabla *"Así queda el
-cobro por hora"* muestra qué se cobraría de 1 a 24 h **con los valores en pantalla, antes
-de guardar**, calculada con la misma función que cobra; si una regla está incompleta o se
-cruza con otra, ahí mismo aparece el aviso y no se deja guardar.
+cobro por hora"* muestra qué se cobraría de 1 a 24 h **con los valores en pantalla**,
+calculada con la misma función que cobra. Mientras no se guarde, dice *"Sin guardar: los
+cobros siguen con los precios anteriores"*. Si una regla está incompleta o se cruza con
+otra, ahí mismo aparece el aviso y no se deja guardar.
 
 Los precios se validan al guardar: un campo vacío o negativo no se guarda (antes un precio
 vacío quedaba cobrando $0). Todos los montos se escriben y se leen con punto de miles.
@@ -253,8 +268,10 @@ otra tarifa.
 
 1. Se abre *Registrar salida* (`F3`) y se escanea o digita la placa, o se hace clic en la
    celda ocupada del panel.
-2. La vista muestra placa, hora de llegada, permanencia, tarifa y total a cobrar.
-   Con *Perdió el tiquete* el total incluye el recargo de $2.000.
+2. La vista muestra placa, hora de llegada, permanencia, tarifa y total a cobrar. El total
+   se actualiza solo cada 5 segundos: si se cruza una hora con la pantalla abierta, se ve
+   antes de cobrar. Con *Perdió el tiquete* el total incluye el recargo de $2.000. Lo que
+   se marca para una moto (tiquete perdido, método, valor acordado) no pasa a la siguiente.
 3. Si se acuerda otro valor con el cliente al pagar (un descuento, casi siempre), el
    **lápiz** junto al total permite escribir lo que se va a cobrar. La pantalla muestra el
    descuento y lo calculado; *Quitar* vuelve a lo calculado. Lo que se cobra y suma a las
@@ -282,7 +299,8 @@ conserva el nombre y el precio con que entró.
 1. Placa (obligatoria) y **tipo de lavada** (obligatorio).
 2. *Otro valor, pactado con el cliente*, si la lavada se negoció: reemplaza el precio de
    lista.
-3. Marca y color (opcionales) y, si deja el casco, el **locker** donde quedó (opcional).
+3. Marca (con recomendación, ver [Marca](#marca-recomendada)) y color, opcionales, y si deja
+   el casco, el **locker** donde quedó (opcional).
 4. *Ingresar al lavadero* guarda la moto y **pregunta si se imprime el tiquete de
    ingreso**: `Enter` imprime, `Esc` no. El tiquete se puede reimprimir después.
 
@@ -300,6 +318,15 @@ Al marcar *Deja el casco en custodia* (en *Nueva entrada* y en el lavadero) apar
 campo **Locker asignado**, opcional. El locker se ve en la salida, en la ficha del
 vehículo y en la lista del lavadero. **Ningún papel impreso dice si se dejó el casco** ni
 en qué locker.
+
+## Marca recomendada
+
+En *Nueva entrada* y en el lavadero, al escribir la marca aparece en gris dentro del campo
+la que coincide con lo escrito: con `ya` se ve *Yamaha*. `Tab` la acepta y pasa al color;
+`Enter`, `→` o tocar la tecla *Tab* del campo también la aceptan. No se despliega ninguna
+lista, y una marca que no está se escribe igual. Las recomendadas son Yamaha, Honda, Bajaj,
+AKT, Suzuki, TVS, Victory, Hero, KTM y Kawasaki (lista en `CampoMarca.jsx`). Con una sola
+letra se recomienda la más común: `h` es Honda; `he`, Hero.
 
 ## Métricas y caja
 
@@ -344,6 +371,25 @@ Funcionamiento de la jornada:
   motos), pero la diferencia guardada es la del momento del cierre. Si después del cierre
   se cobra en efectivo, la caja lo avisa: hay que reabrir y cerrar otra vez para que la
   próxima jornada abra con esa plata.
+
+## Aviso del cierre por Telegram
+
+Al cerrar la caja, el administrador recibe en Telegram las ventas del día (parqueadero,
+lavadero, efectivo, transferencia y descuentos), el cuadre (base, lo que debía haber, lo
+contado, sobrante o faltante, lo retirado y lo que quedó), el movimiento (entradas,
+salidas, lavadas y motos adentro), lo vendido en el mes y las observaciones.
+
+Se configura una sola vez en *Configuración → Telegram*:
+
+1. En Telegram, buscar a **@BotFather**, escribir `/newbot` y copiar el token en la app.
+2. Desde el Telegram del administrador, abrir el bot y escribirle cualquier cosa.
+3. Tocar **Buscar** (llena el chat) y **Enviar mensaje de prueba**.
+4. Si el mensaje llegó, activar *Avisar cada cierre de caja* y guardar.
+
+El cierre nunca depende de Telegram: se guarda primero y luego se intenta enviar. Sin
+internet el aviso queda **pendiente**, la caja lo muestra y se reintenta solo al abrir la
+aplicación y cada 5 minutos (*Enviar ahora* lo fuerza). Reabrir la jornada lo cancela, y
+al cerrarla otra vez se envía de nuevo.
 
 ## Hardware
 
@@ -436,7 +482,8 @@ con Enter, es una lectura.
   reglas por tiempo, liquidación normal, ticket perdido, valor acordado al cobrar, cobrar
   con o sin imprimir, método de pago (efectivo / transferencia), comprobante, historial
   por placa, métricas de ventas, caja registradora con cierre diario y la base que pasa de
-  un día al siguiente, configuración editable y validada, lavadero, locker del casco, impresión térmica y lector de código de
+  un día al siguiente, aviso del cierre por Telegram, configuración editable y validada,
+  lavadero, marca recomendada, locker del casco, impresión térmica y lector de código de
   barras.
 - **Por verificar en el equipo del cliente** (no hay térmica en el equipo de desarrollo):
   que la JAL58M acepte trabajos RAW por su cola de Windows, que imprima tildes con la
@@ -444,3 +491,6 @@ con Enter, es una lectura.
   código del tiquete. La página de prueba cubre las cuatro cosas. El contenido y las
   medidas de los papeles están verificados con una simulación de los bytes ESC/POS.
   Falta también comprobar que el lector tome el código del tiquete de lavadero.
+- **Por verificar con el bot real**: que el mensaje llegue al Telegram del administrador.
+  El equipo de desarrollo llegó a la API de Telegram y un token falso se rechazó con su
+  mensaje en español, pero ningún mensaje se ha entregado todavía a un chat real.

@@ -49,7 +49,12 @@ CREATE TABLE IF NOT EXISTS settings (
   -- configuradas: `db/index.js` siembra el texto predeterminado al abrir la base.
   politicas_tiquete    TEXT,
 
-  updated_at           TEXT    NOT NULL DEFAULT (datetime('now','localtime'))
+  -- Aviso del cierre de caja al administrador. Ver services/telegram.js.
+  telegram_activo      INTEGER NOT NULL DEFAULT 0,
+  telegram_token       TEXT    NOT NULL DEFAULT '',
+  telegram_chat_id     TEXT    NOT NULL DEFAULT '',
+
+  updated_at          TEXT    NOT NULL DEFAULT (datetime('now','localtime'))
 );
 
 -- ------------------------------------------------------------
@@ -127,7 +132,10 @@ CREATE TABLE IF NOT EXISTS caja_dias (
   -- Lo que se deja en el cajón al cerrar (el resto se retira): es la base con
   -- la que abre la jornada siguiente. NULL mientras la jornada siga abierta.
   queda_en_caja  INTEGER,
-  observaciones  TEXT    NOT NULL DEFAULT ''
+  observaciones  TEXT    NOT NULL DEFAULT '',
+  -- Aviso de este cierre por Telegram: NULL = no aplica, 'pendiente' = falta
+  -- enviarlo (se reintenta solo), 'enviado'.
+  aviso_estado   TEXT
 );
 
 -- ------------------------------------------------------------
@@ -187,10 +195,10 @@ CREATE INDEX IF NOT EXISTS idx_lavados_hora_entrega ON lavados (hora_entrega DES
 -- ------------------------------------------------------------
 DROP VIEW IF EXISTS ventas;
 CREATE VIEW ventas AS
-  SELECT 'parqueadero' AS origen, id, placa, monto, metodo_pago, fecha
+  SELECT 'parqueadero' AS origen, id, placa, monto, ajuste, metodo_pago, fecha
     FROM transactions
   UNION ALL
-  SELECT 'lavadero' AS origen, id, placa, monto, metodo_pago, hora_entrega AS fecha
+  SELECT 'lavadero' AS origen, id, placa, monto, ajuste, metodo_pago, hora_entrega AS fecha
     FROM lavados
    WHERE estado = 'entregado';
 
