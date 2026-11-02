@@ -41,44 +41,49 @@ export default function TramosHora({ valor, onChange }) {
       </div>
 
       {tramos.map((t, i) => (
-        <div
-          key={i}
-          className="flex items-center gap-2 px-4 py-2.5 border-b border-linea text-base text-grafito"
-        >
-          <span>Más de</span>
-          <CampoEntero
-            valor={t.desde}
-            onChange={cambiar(i, 'desde')}
-            className="w-14 py-1.5 text-center"
-            aria-label={`Regla ${i + 1}: más de cuántas horas`}
-          />
-          <span>h y hasta</span>
-          <CampoEntero
-            valor={t.hasta}
-            onChange={cambiar(i, 'hasta')}
-            className="w-14 py-1.5 text-center"
-            aria-label={`Regla ${i + 1}: hasta cuántas horas`}
-          />
-          <span>h se cobran</span>
-          <div className="ml-auto w-36">
-            <CampoPesos
-              valor={t.valor}
-              onChange={cambiar(i, 'valor')}
-              className="py-1.5"
-              placeholder="0"
-              aria-label={`Regla ${i + 1}: valor en pesos`}
+        <div key={i} className="px-4 py-2.5 border-b border-linea">
+          <div className="flex items-center gap-2 text-base text-grafito">
+            <span>Más de</span>
+            <CampoEntero
+              valor={t.desde}
+              onChange={cambiar(i, 'desde')}
+              className="w-14 py-1.5 text-center"
+              aria-label={`Regla ${i + 1}: más de cuántas horas`}
             />
+            <span>h y hasta</span>
+            <CampoEntero
+              valor={t.hasta}
+              onChange={cambiar(i, 'hasta')}
+              className="w-14 py-1.5 text-center"
+              aria-label={`Regla ${i + 1}: hasta cuántas horas`}
+            />
+            <span>h se cobran</span>
+            <div className="ml-auto w-36">
+              <CampoPesos
+                valor={t.valor}
+                onChange={cambiar(i, 'valor')}
+                className="py-1.5"
+                placeholder="0"
+                aria-label={`Regla ${i + 1}: valor en pesos`}
+              />
+            </div>
+            <button
+              type="button"
+              onClick={() => guardar(tramos.filter((_, j) => j !== i))}
+              title="Quitar esta regla"
+              aria-label={`Quitar la regla ${i + 1}`}
+              className="rounded-md p-1.5 text-niebla transition-colors duration-rapido
+                         hover:bg-alerta-50 hover:text-alerta"
+            >
+              <Icono nombre="eliminar" tam={16} />
+            </button>
           </div>
-          <button
-            type="button"
-            onClick={() => guardar(tramos.filter((_, j) => j !== i))}
-            title="Quitar esta regla"
-            aria-label={`Quitar la regla ${i + 1}`}
-            className="rounded-md p-1.5 text-niebla transition-colors duration-rapido
-                       hover:bg-alerta-50 hover:text-alerta"
-          >
-            <Icono nombre="eliminar" tam={16} />
-          </button>
+          {Number(t.hasta) > Number(t.desde) && (
+            <p className="mt-1 text-micro text-niebla">
+              Cubre de la hora {Number(t.desde) + 1} a la hora {t.hasta}: con {t.desde} h y 1 min la
+              moto ya entró a la regla, y con {t.hasta} h y 1 min ya salió.
+            </p>
+          )}
         </div>
       ))}
 

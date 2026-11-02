@@ -5,7 +5,7 @@ import * as transacciones from '../db/transactionsRepo.js'
 import { calcularCobro, totalCobrado } from './pricing.js'
 import { asegurarJornada, normalizarMetodoPago } from './caja.js'
 import { debeImprimir, imprimirRecibo, sinImprimir } from './printer.js'
-import { ahoraSql } from './tiempo.js'
+import { aTextoSql } from './tiempo.js'
 
 /**
  * Cotiza (sin cobrar) el valor a pagar de una placa que está adentro.
@@ -59,15 +59,17 @@ export async function liquidar({
   if (!vehicle) throw new Error('Vehículo no encontrado')
   if (vehicle.estado !== 'activo') throw new Error(`La placa ${vehicle.placa} ya fue liquidada`)
 
-  const salida = ahoraSql()
+  // Un solo instante: la hora del recibo es la misma con la que se calculó.
+  const ahora = new Date()
+  const salida = aTextoSql(ahora)
 
   if (vehicle.tipo_tarifa === 'mensualidad') {
-    const cobro = calcularCobro({ vehicle, settings })
+    const cobro = calcularCobro({ vehicle, settings, ahora })
     return { vehicle: vehiculos.finalizar(vehicle.id, salida), transaccion: null, cobro, impresion: null }
   }
 
   const metodo = normalizarMetodoPago(metodoPago)
-  const cobro = calcularCobro({ vehicle, settings, ticketPerdido })
+  const cobro = calcularCobro({ vehicle, settings, ahora, ticketPerdido })
   const { ajuste } = totalCobrado(cobro.total, totalAcordado)
 
   const { vehicle: finalizado, transaccion } = enTransaccion(() => {

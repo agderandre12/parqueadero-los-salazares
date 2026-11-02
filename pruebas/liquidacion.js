@@ -29,7 +29,11 @@ import {
 import { nombreCola } from '../src/main/services/colaWindows.js'
 import { registrarEntrada, cobroMensualidad } from '../src/main/services/entrada.js'
 import { actualizarConfiguracion } from '../src/main/services/configuracion.js'
-import { normalizarTramos, simularTarifaHora } from '../src/main/services/pricing.js'
+import {
+  calcularCobro,
+  normalizarTramos,
+  simularTarifaHora
+} from '../src/main/services/pricing.js'
 import {
   entregarLavado,
   guardarTipo,
@@ -860,6 +864,155 @@ async function correr() {
   } catch {
     /* Windows a veces retiene el archivo; no afecta la prueba */
   }
+
+  await reglasContraCobroReal()
+}
+
+/** Abre una base nueva y vacía; `fn` corre sobre ella y se borra al terminar. */
+async function enBaseNueva(fn) {
+  const carpeta = mkdtempSync(join(tmpdir(), 'parqueadero-simulacion-'))
+  app.setPath('userData', carpeta)
+  getDb()
+  await fn()
+  closeDb()
+  try {
+    rmSync(carpeta, { recursive: true, force: true })
+  } catch {
+    /* Windows a veces retiene el archivo; no afecta la prueba */
+  }
+}
+
+/*
+ * Las reglas tal como se le explican al administrador, escritas aparte de
+ * `calcularCobro`: si las dos cuentas no coinciden, una está mal.
+ */
+function cuentaAparte(c, segundos) {
+  if (segundos <= c.minutos_gracia * 60) return 0
+  const horas = Math.max(1, Math.ceil(segundos / 3600))
+  const bloques = Math.ceil(horas / c.horas_tope_dia)
+  const regla = c.reglas.find((r) => horas >= r.desde + 1 && horas <= r.hasta)
+  return Math.min(regla ? regla.valor : horas * c.tarifa_hora, bloques * c.tarifa_amanecida)
+}
+
+const PRECIOS_DE_PRUEBA = [
+  // El ejemplo del negocio.
+  {
+    tarifa_hora: 2000,
+    tarifa_amanecida: 15000,
+    minutos_gracia: 10,
+    horas_tope_dia: 24,
+    reglas: [{ desde: 5, hasta: 12, valor: 10000 }]
+  },
+  // Una regla por encima de la amanecida: manda el tope.
+  {
+    tarifa_hora: 2000,
+    tarifa_amanecida: 10000,
+    minutos_gracia: 10,
+    horas_tope_dia: 24,
+    reglas: [{ desde: 8, hasta: 11, valor: 11110 }]
+  },
+  // Sin reglas y sin gracia.
+  { tarifa_hora: 1500, tarifa_amanecida: 8000, minutos_gracia: 0, horas_tope_dia: 24, reglas: [] },
+  // Varias reglas, bloque de 12 h y una regla más allá del primer bloque.
+  {
+    tarifa_hora: 3000,
+    tarifa_amanecida: 20000,
+    minutos_gracia: 15,
+    horas_tope_dia: 12,
+    reglas: [
+      { desde: 0, hasta: 2, valor: 4000 },
+      { desde: 2, hasta: 6, valor: 9000 },
+      { desde: 30, hasta: 40, valor: 35000 }
+    ]
+  },
+  // Una regla que sólo aplica desde el segundo día.
+  {
+    tarifa_hora: 2000,
+    tarifa_amanecida: 30000,
+    minutos_gracia: 5,
+    horas_tope_dia: 24,
+    reglas: [{ desde: 24, hasta: 36, valor: 35000 }]
+  }
+]
+
+async function reglasContraCobroReal() {
+  console.log('\nReglas de cobro contra el cobro real')
+
+  await enBaseNueva(async () => {
+    let placa = 0
+
+    for (const [i, c] of PRECIOS_DE_PRUEBA.entries()) {
+      const { reglas, ...precios } = c
+      actualizarConfiguracion({ ...precios, tramos_hora: JSON.stringify(reglas) })
+      const settings = getSettings()
+      const nombre = `precios ${i + 1}`
+
+      // Minuto a minuto durante tres días, y un segundo a cada lado de cada hora.
+      const entrada = new Date(2026, 5, 10, 8, 0, 0)
+      const vehicle = { hora_entrada: aTextoSql(entrada), tipo_tarifa: 'hora' }
+      const instantes = new Set()
+      for (let s = 0; s <= 72 * 3600; s += 60) instantes.add(s)
+      for (let h = 1; h <= 72; h++) [-1, 0, 1].forEach((d) => instantes.add(h * 3600 + d))
+
+      const distintos = [...instantes].filter((s) => {
+        // Los milisegundos del reloj no pueden mover el cobro a la hora siguiente.
+        const ahora = new Date(entrada.getTime() + s * 1000 + 700)
+        return calcularCobro({ vehicle, settings, ahora }).total !== cuentaAparte(c, s)
+      })
+      iguales(distintos.length, 0, `${nombre}: ${instantes.size} instantes dan la cuenta hecha aparte`)
+
+      const tabla = simularTarifaHora(settings)
+      iguales(
+        tabla.filter((f) => f.total !== cuentaAparte(c, f.horas * 3600 - 60)).length,
+        0,
+        `${nombre}: la tabla de Configuración da la misma cuenta`
+      )
+
+      // Y lo que de verdad queda cobrado, por el camino de la salida.
+      let cobrosMal = 0
+      let detalleMal = 0
+      for (const f of tabla) {
+        const texto = `R${++placa}`
+        vehiculos.crearEntrada({
+          placa: texto,
+          hora_entrada: aTextoSql(new Date(Date.now() - (f.horas * 3600 - 60) * 1000))
+        })
+        const vista = cotizar({ placa: texto }).cobro
+        const { transaccion, cobro } = await liquidar({
+          placa: texto,
+          metodoPago: 'efectivo',
+          imprimir: false
+        })
+        if (transaccion.monto !== f.total || vista.total !== f.total) cobrosMal++
+        if (f.tramo !== cobro.detalle.includes('tramo') || f.tope !== cobro.detalle.includes('tope')) {
+          detalleMal++
+        }
+      }
+      iguales(cobrosMal, 0, `${nombre}: cada hora de la tabla se cobra igual en la salida`)
+      iguales(detalleMal, 0, `${nombre}: el recibo dice regla o tope donde la tabla lo dice`)
+    }
+
+    // Lo que se ve en pantalla cuando una regla queda por encima del tope.
+    const c = PRECIOS_DE_PRUEBA[1]
+    actualizarConfiguracion({ ...c, tramos_hora: JSON.stringify(c.reglas) })
+    const tabla = simularTarifaHora(getSettings())
+    ok(!tabla[8].tramo && tabla[8].tope, 'una regla sobre el tope no se pinta como regla')
+    iguales(tabla[8].tramoTopado?.valor, 11110, 'y la tabla informa qué regla quedó anulada')
+
+    const settings = getSettings()
+    const entrada = new Date(2026, 5, 10, 8, 0, 0)
+    const vehicle = { hora_entrada: aTextoSql(entrada), tipo_tarifa: 'hora' }
+    const a = (segundos) => new Date(entrada.getTime() + segundos * 1000)
+    const total = (segundos, ajustes = settings) =>
+      calcularCobro({ vehicle, settings: ajustes, ahora: a(segundos) }).total
+
+    iguales(total(600), 0, 'a los 10 min exactos todavía es gracia')
+    iguales(total(601), 2000, 'y un segundo después ya se cobra')
+    const sinGracia = { ...settings, minutos_gracia: 0 }
+    iguales(total(30, sinGracia), 2000, 'con 0 min de gracia se cobra desde el primer minuto')
+    iguales(total(3600), 2000, 'la hora exacta es 1 hora')
+    iguales(total(3601), 4000, 'y un segundo más ya es la segunda')
+  })
 }
 
 correr()

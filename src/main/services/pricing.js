@@ -17,16 +17,21 @@ const HORAS_MAXIMAS_TRAMO = 720
  *  - 'mensualidad'   : $0 al salir: se cobró al entrar (`services/entrada.js`).
  *                      No aplican gracia ni tiquete perdido.
  *  - 'personalizada' : valor fijo pactado, guardado en tarifa_personalizada.
- *  - Antes de `minutos_gracia` no se cobra nada.
+ *  - Hasta cumplir `minutos_gracia` no se cobra nada.
  *  - `ticketPerdido` suma el recargo configurado (por defecto $2.000).
+ *
+ * `tramo` es la regla que se cobró. Si una regla vale más que el tope se cobra
+ * el tope: `tramo` queda en null y la regla anulada viene en `tramoTopado`.
  *
  * @returns {{minutos:number, horas:number, dias:number, montoBase:number,
  *            recargo:number, total:number, tipoTarifa:string, detalle:string,
- *            tramo:object|null, tope:boolean}}
+ *            tramo:object|null, tramoTopado:object|null, tope:boolean}}
  */
 export function calcularCobro({ vehicle, settings, ahora = new Date(), ticketPerdido = false }) {
   const entrada = desdeTextoSql(vehicle.hora_entrada)
-  const ms = Math.max(0, ahora.getTime() - entrada.getTime())
+  // La entrada se guarda sin milisegundos: sin igualarlos, salir a la hora
+  // exacta contaría como la hora siguiente.
+  const ms = Math.max(0, Math.floor((ahora.getTime() - entrada.getTime()) / 1000) * 1000)
   const minutos = Math.floor(ms / 60000)
   const horas = Math.max(1, Math.ceil(ms / 3600000))
   const horasBloque = Number(settings.horas_tope_dia) || 24
@@ -36,6 +41,7 @@ export function calcularCobro({ vehicle, settings, ahora = new Date(), ticketPer
   let montoBase = 0
   let detalle = ''
   let tramo = null
+  let tramoTopado = null
   let tope = false
 
   if (tipo === 'mensualidad') {
@@ -49,11 +55,12 @@ export function calcularCobro({ vehicle, settings, ahora = new Date(), ticketPer
       tipoTarifa: tipo,
       detalle: 'Mensualidad',
       tramo,
+      tramoTopado,
       tope
     }
   }
 
-  if (minutos <= (Number(settings.minutos_gracia) || 0) && tipo !== 'personalizada') {
+  if (ms <= (Number(settings.minutos_gracia) || 0) * 60000 && tipo !== 'personalizada') {
     montoBase = 0
     detalle = `Tiempo de gracia (${minutos} min)`
   } else {
@@ -70,11 +77,14 @@ export function calcularCobro({ vehicle, settings, ahora = new Date(), ticketPer
 
       case 'hora':
       default: {
-        tramo = tramosGuardados(settings).find((t) => horas > t.desde && horas <= t.hasta) ?? null
-        const porHoras = tramo ? tramo.valor : horas * Number(settings.tarifa_hora)
+        const regla =
+          tramosGuardados(settings).find((t) => horas > t.desde && horas <= t.hasta) ?? null
+        const porHoras = regla ? regla.valor : horas * Number(settings.tarifa_hora)
         const maximo = dias * Number(settings.tarifa_amanecida)
         montoBase = Math.min(porHoras, maximo)
         tope = porHoras > maximo
+        tramo = tope ? null : regla
+        tramoTopado = tope ? regla : null
         detalle = tope
           ? `${horas} h (tope amanecida x${dias})`
           : tramo
@@ -99,6 +109,7 @@ export function calcularCobro({ vehicle, settings, ahora = new Date(), ticketPer
     tipoTarifa: tipo,
     detalle,
     tramo,
+    tramoTopado,
     tope
   }
 }
@@ -218,7 +229,13 @@ export function simularTarifaHora(settings) {
     // Un minuto antes de cumplirse: son exactamente `horas` horas iniciadas.
     const ahora = new Date(entrada.getTime() + horas * 3600000 - 60000)
     const cobro = calcularCobro({ vehicle, settings: ajustes, ahora })
-    filas.push({ horas, total: cobro.total, tramo: Boolean(cobro.tramo), tope: cobro.tope })
+    filas.push({
+      horas,
+      total: cobro.total,
+      tramo: Boolean(cobro.tramo),
+      tramoTopado: cobro.tramoTopado,
+      tope: cobro.tope
+    })
   }
 
   return filas

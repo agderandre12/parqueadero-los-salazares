@@ -13,6 +13,8 @@ import {
   ETIQUETA_TARIFA
 } from '../lib/format.js'
 
+const SEGUNDOS_RECOTIZAR = 5
+
 /*
  * Registrar salida. Es una vista y no un modal: el escáner puede traer al
  * operario aquí en cualquier momento, y una ventana encima de otra ventana
@@ -68,11 +70,14 @@ export default function Salida({ placaInicial, ahora, onLiquidado, onAviso }) {
     else buscadorRef.current?.focus()
   }, [placaInicial, cotizar])
 
-  // Un valor acordado es para esa moto: otra placa arranca con lo calculado.
-  // Marcar el tiquete perdido recotiza la misma moto y no lo borra.
+  // Todo lo que se decidió al cobrar es de esa moto: otra placa arranca limpia.
+  // Sin esto, un tiquete perdido marcado le cobraba el recargo a la moto
+  // siguiente. Marcarlo recotiza la misma moto y no borra lo demás.
   useEffect(() => {
     setAcordado(null)
     setEditandoTotal(false)
+    setTicketPerdido(false)
+    setMetodoPago(null)
   }, [datos?.vehicle?.id])
 
   // Recotiza al marcar ticket perdido: el recargo cambia el total.
@@ -81,6 +86,22 @@ export default function Salida({ placaInicial, ahora, onLiquidado, onAviso }) {
     // Sólo debe dispararse al cambiar el interruptor.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [ticketPerdido])
+
+  // `liquidar` cobra con la hora del clic: el total en pantalla tiene que seguir
+  // al reloj, o el cliente paga más de lo que vio si se cruza una hora.
+  const placaCotizada = fase === 'listo' ? datos?.vehicle?.placa : null
+  useEffect(() => {
+    if (!placaCotizada) return
+    let vigente = true
+    const id = setInterval(async () => {
+      const res = await window.api.vehiculos.cotizar({ placa: placaCotizada, ticketPerdido })
+      if (vigente && res.ok) setDatos(res.data)
+    }, SEGUNDOS_RECOTIZAR * 1000)
+    return () => {
+      vigente = false
+      clearInterval(id)
+    }
+  }, [placaCotizada, ticketPerdido])
 
   // Sugerencias mientras se digita.
   useEffect(() => {

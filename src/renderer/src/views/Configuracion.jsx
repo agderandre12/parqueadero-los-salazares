@@ -239,7 +239,7 @@ export default function Configuracion({ settings, seccionInicial = 'tarifas', on
               </section>
 
               <TramosHora valor={form.tramos_hora} onChange={set('tramos_hora')} />
-              <SimulacionCobro form={form} />
+              <SimulacionCobro form={form} sinGuardar={sucio} />
             </>
           )}
 
@@ -283,7 +283,7 @@ export default function Configuracion({ settings, seccionInicial = 'tarifas', on
                 </div>
               </section>
 
-              <SimulacionCobro form={form} />
+              <SimulacionCobro form={form} sinGuardar={sucio} />
             </>
           )}
 
